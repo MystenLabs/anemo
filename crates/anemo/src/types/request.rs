@@ -210,6 +210,29 @@ impl<T> Request<T> {
         self.set_timeout(timeout);
         self
     }
+
+    /// Returns the previously-set timeout on this Request, or None if
+    /// not set or invalid.
+    ///
+    /// Example:
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use anemo::Request;
+    ///
+    /// let request = Request::new(()).with_timeout(Duration::from_secs(30));
+    /// let timeout = request.timeout().unwrap();
+    ///
+    /// assert_eq!(
+    ///     timeout,
+    ///     Duration::from_secs(30),
+    /// );
+    /// ```
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        crate::middleware::timeout::try_parse_timeout(self.headers())
+            .ok()
+            .flatten()
+    }
 }
 
 pub trait IntoRequest<T> {

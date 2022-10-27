@@ -10,7 +10,7 @@ pub(crate) mod outbound;
 /// the value we attempted to parse.
 ///
 /// The value of the `timeout` header is expected to in nanoseconds encoded encoded as an u64
-fn try_parse_timeout(headers: &HeaderMap) -> Result<Option<Duration>, &str> {
+pub(crate) fn try_parse_timeout(headers: &HeaderMap) -> Result<Option<Duration>, &str> {
     match headers.get(header::TIMEOUT) {
         Some(val) => {
             let nanoseconds = val.parse::<u64>().map_err(|_| val.as_ref())?;

@@ -42,6 +42,17 @@ impl InboundRequestHandler {
 
         let mut inflight_requests = tokio::task::JoinSet::new();
 
+        // TODO: find the source of the memory growth and remove the expiration of connections.
+        //
+        // After some experimentation we've found that cycling quinn connections seems to prevent
+        // unbounded memory retention/growth. This potentially means there may be some unexplained
+        // memory retention/growth issues inside of the quinn connection itself. Until we're able
+        // to root-cause the source of the memory problems, we'll work around the problem by
+        // putting an upper bound on how long a connection is held on to: between 30-90 minutes.
+        let mut expiration_timer = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(
+            rand::Rng::gen_range(&mut rand::thread_rng(), 1800..=5400),
+        )));
+
         loop {
             tokio::select! {
                 // anemo does not currently use uni streams so we can
@@ -84,6 +95,11 @@ impl InboundRequestHandler {
                     // If a task panics, just propagate it
                     completed_request.unwrap();
                 },
+                () = &mut expiration_timer => {
+                    debug!(peer =% self.connection.peer_id(), "Shutting down at expiration");
+                    self.connection.close();
+                    break;
+                }
             }
         }
 

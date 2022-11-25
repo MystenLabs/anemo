@@ -72,8 +72,13 @@ impl InboundRequestHandler {
                         }
                     }
                 },
-                bi = self.incoming_bi.select_next_some() => {
-                    match bi {
+                bi = self.incoming_bi.next() => {
+                    if bi.is_none() {
+                        // Nothing to be polled next, connection has been closed
+                        debug!(peer =% self.connection.peer_id(), "Connection has been closed locally, now exit");
+                        break;
+                    }
+                    match bi.unwrap() {
                         Ok((bi_tx, bi_rx)) => {
                             trace!("incoming bi stream! {}", bi_tx.id());
                             let request_handler =
@@ -98,7 +103,6 @@ impl InboundRequestHandler {
                     }
                 },
                 () = inflight_requests.select_next_some() => {},
-                complete => break,
                 () = &mut expiration_timer => {
                     debug!(peer =% self.connection.peer_id(), "Shutting down at expiration");
                     self.connection.close();

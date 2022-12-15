@@ -109,7 +109,7 @@ pub fn generate(service: &Service) -> TokenStream {
 
 fn generate_trait(service: &Service, server_trait: Ident) -> TokenStream {
     let methods = generate_trait_methods(service);
-    let trait_doc = generate_doc_comment(&format!(
+    let trait_doc = generate_doc_comment(format!(
         "Generated trait containing RPC methods that should be implemented for use with {}Server.",
         service.name()
     ));

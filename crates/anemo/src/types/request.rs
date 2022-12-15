@@ -235,6 +235,12 @@ impl<T> Request<T> {
     }
 }
 
+impl Request<bytes::Bytes> {
+    pub fn empty() -> Self {
+        Self::new(bytes::Bytes::new())
+    }
+}
+
 pub trait IntoRequest<T> {
     /// Wrap the input message `T` in a `Request`
     fn into_request(self) -> Request<T>;

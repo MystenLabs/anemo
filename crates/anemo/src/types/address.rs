@@ -8,8 +8,8 @@ pub enum Address {
     /// a host name that will be resolved via DNS.
     HostAndPort { host: Box<str>, port: u16 },
 
-    /// A string representation of a SocketAddr or a string like <host_name>:<port> pair where
-    /// <port> is a u16 value.
+    /// A string representation of a SocketAddr or a string like `<host_name>:<port>` pair where
+    /// `<port>` is a u16 value.
     AddressString(Box<str>),
 }
 

@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
 
+
 env:
   CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
@@ -14,10 +15,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@dc323e67f16fb5f7663d20ff7941f27f5809e9b6 # pin@v2
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af # pin@v1
         with:
           toolchain: stable
           components: rustfmt, clippy

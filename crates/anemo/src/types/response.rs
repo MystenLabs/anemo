@@ -236,6 +236,12 @@ impl<T> Response<T> {
     }
 }
 
+impl Response<bytes::Bytes> {
+    pub fn empty() -> Self {
+        Self::new(bytes::Bytes::new())
+    }
+}
+
 pub trait IntoResponse {
     /// Create a response.
     fn into_response(self) -> Response<bytes::Bytes>;

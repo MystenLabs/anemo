@@ -2,6 +2,7 @@ pub mod auth;
 pub mod callback;
 pub mod classify;
 pub mod request_id;
+pub mod set_header;
 pub mod trace;
 
 /// The latency unit used to report latencies by middleware.

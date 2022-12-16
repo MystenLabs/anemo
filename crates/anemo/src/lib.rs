@@ -30,7 +30,18 @@ pub mod codegen {
         sync::Arc,
         task::{Context, Poll},
     };
-    pub use tower::Service;
+    pub use tower::{
+        layer::util::Stack,
+        util::{BoxLayer, BoxService},
+        Service,
+    };
+
+    pub type InboundRequestLayer<Req, Resp> = BoxLayer<
+        BoxService<crate::Request<Req>, crate::Response<Resp>, crate::rpc::Status>,
+        crate::Request<Req>,
+        crate::Response<Resp>,
+        crate::rpc::Status,
+    >;
 }
 
 #[cfg(test)]

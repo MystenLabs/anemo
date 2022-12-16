@@ -12,7 +12,29 @@ use syn::{Ident, Lit, LitStr};
 /// This takes some `Service` and will generate a `TokenStream` that contains
 /// a public module containing the server service and handler trait.
 pub fn generate(service: &Service) -> TokenStream {
-    let methods = generate_methods(service);
+    let method_routes = generate_method_routes(service);
+    let method_services = generate_method_services(service);
+
+    let method_layer_names: Vec<_> = service
+        .methods()
+        .iter()
+        .map(|method| quote::format_ident!("{}_layer", method.name()))
+        .collect();
+    let method_request_types: Vec<_> = service
+        .methods()
+        .iter()
+        .map(|method| method.request_type())
+        .collect();
+    let method_response_types: Vec<_> = service
+        .methods()
+        .iter()
+        .map(|method| method.response_type())
+        .collect();
+    let add_layer_function_names: Vec<_> = service
+        .methods()
+        .iter()
+        .map(|method| quote::format_ident!("add_layer_for_{}", method.name()))
+        .collect();
 
     let server_service = quote::format_ident!("{}Server", service.name());
     let server_trait = quote::format_ident!("{}", service.name());
@@ -39,6 +61,7 @@ pub fn generate(service: &Service) -> TokenStream {
                 clippy::let_unit_value,
             )]
             use anemo::codegen::*;
+            pub use anemo::codegen::InboundRequestLayer;
 
             #generated_trait
 
@@ -46,6 +69,7 @@ pub fn generate(service: &Service) -> TokenStream {
             #[derive(Debug)]
             pub struct #server_service<T: #server_trait> {
                 inner: Arc<T>,
+                #( #method_layer_names: InboundRequestLayer<#method_request_types, #method_response_types>, )*
             }
 
             impl<T: #server_trait> #server_service<T> {
@@ -56,6 +80,7 @@ pub fn generate(service: &Service) -> TokenStream {
                 pub fn from_arc(inner: Arc<T>) -> Self {
                     Self {
                         inner,
+                        #( #method_layer_names: InboundRequestLayer::new(tower::layer::util::Identity::new()), )*
                     }
                 }
 
@@ -66,7 +91,21 @@ pub fn generate(service: &Service) -> TokenStream {
                 pub fn into_inner(self) -> Arc<T> {
                     self.inner
                 }
+
+                #(
+                pub fn #add_layer_function_names(
+                    mut self,
+                    layer: InboundRequestLayer<#method_request_types, #method_response_types>,
+                ) -> Self {
+                    self.#method_layer_names = InboundRequestLayer::new(
+                        Stack::new(self.#method_layer_names, layer)
+                    );
+                    self
+                }
+                )*
             }
+
+            #method_services
 
             impl<T> anemo::codegen::Service<anemo::Request<Bytes>> for #server_service<T>
                 where
@@ -76,7 +115,10 @@ pub fn generate(service: &Service) -> TokenStream {
                 type Error = std::convert::Infallible;
                 type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-                fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+                fn poll_ready(
+                    &mut self,
+                    _cx: &mut Context<'_>,
+                ) -> Poll<Result<(), Self::Error>> {
                     Poll::Ready(Ok(()))
                 }
 
@@ -84,7 +126,7 @@ pub fn generate(service: &Service) -> TokenStream {
                     let inner = self.inner.clone();
 
                     match req.route() {
-                        #methods
+                        #method_routes
 
                         _ => Box::pin(async move {
                             Ok(anemo::types::response::StatusCode::NotFound.into_response())
@@ -96,8 +138,10 @@ pub fn generate(service: &Service) -> TokenStream {
             impl<T: #server_trait> Clone for #server_service<T> {
                 fn clone(&self) -> Self {
                     let inner = self.inner.clone();
+                    #( let #method_layer_names = self.#method_layer_names.clone(); )*
                     Self {
                         inner,
+                        #(#method_layer_names),*
                     }
                 }
             }
@@ -162,7 +206,60 @@ fn generate_transport(
     }
 }
 
-fn generate_methods(service: &Service) -> TokenStream {
+fn generate_method_services(service: &Service) -> TokenStream {
+    let mut stream = TokenStream::new();
+
+    for method in service.methods() {
+        let server_trait = quote::format_ident!("{}", service.name());
+        let method_service = generate_method_service(method, server_trait);
+        stream.extend(method_service);
+    }
+
+    stream
+}
+
+fn generate_method_service(method: &Method, server_trait: Ident) -> TokenStream {
+    let method_ident = quote::format_ident!("{}", method.name());
+    let service_ident = quote::format_ident!("{}Svc", method.identifier());
+
+    let request = method.request_type();
+    let response = method.response_type();
+
+    quote! {
+        #[allow(non_camel_case_types)]
+        #[derive(Debug)]
+        struct #service_ident<T: #server_trait >(pub Arc<T>);
+
+        impl<T: #server_trait> anemo::codegen::Service<anemo::Request<#request>> for #service_ident<T> {
+            type Response = anemo::Response<#response>;
+            type Error = anemo::rpc::Status;
+            type Future = BoxFuture<'static, Result<Self::Response, anemo::rpc::Status>>;
+
+            fn poll_ready(
+                &mut self,
+                cx: &mut core::task::Context<'_>,
+            ) -> core::task::Poll<Result<(), Self::Error>> {
+                core::task::Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, request: anemo::Request<#request>) -> Self::Future {
+                let inner = self.0.clone();
+                let fut = async move {
+                    (*inner).#method_ident(request).await
+                };
+                Box::pin(fut)
+            }
+        }
+
+        impl<T: #server_trait> Clone for #service_ident<T> {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
+    }
+}
+
+fn generate_method_routes(service: &Service) -> TokenStream {
     let mut stream = TokenStream::new();
 
     for method in service.methods() {
@@ -178,10 +275,7 @@ fn generate_methods(service: &Service) -> TokenStream {
             method.identifier()
         );
         let method_path = Lit::Str(LitStr::new(&path, Span::call_site()));
-        let ident = quote::format_ident!("{}", method.name());
-        let server_trait = quote::format_ident!("{}", service.name());
-
-        let method_stream = generate_unary(method, ident, server_trait);
+        let method_stream = generate_method_route(method);
 
         let method = quote! {
             #method_path => {
@@ -194,34 +288,18 @@ fn generate_methods(service: &Service) -> TokenStream {
     stream
 }
 
-fn generate_unary(method: &Method, method_ident: Ident, server_trait: Ident) -> TokenStream {
+fn generate_method_route(method: &Method) -> TokenStream {
     let codec_name = syn::parse_str::<syn::Path>(method.codec_path()).unwrap();
 
+    let layer_name = quote::format_ident!("{}_layer", method.name());
     let service_ident = quote::format_ident!("{}Svc", method.identifier());
 
-    let request = method.request_type();
-    let response = method.response_type();
-
     quote! {
-        #[allow(non_camel_case_types)]
-        struct #service_ident<T: #server_trait >(pub Arc<T>);
-
-        impl<T: #server_trait> anemo::rpc::server::UnaryService<#request> for #service_ident<T> {
-            type Response = #response;
-            type Future = BoxFuture<'static, Result<anemo::Response<Self::Response>, anemo::rpc::Status>>;
-
-            fn call(&mut self, request: anemo::Request<#request>) -> Self::Future {
-                let inner = self.0.clone();
-                let fut = async move {
-                    (*inner).#method_ident(request).await
-                };
-                Box::pin(fut)
-            }
-        }
-
         let inner = self.inner.clone();
+        let layer = self.#layer_name.clone();
         let fut = async move {
-            let method = #service_ident(inner);
+            use tower::Layer;
+            let method = layer.layer(BoxService::new(#service_ident(inner)));
             let codec = #codec_name::default();
 
             let mut rpc = anemo::rpc::server::Rpc::new(codec);

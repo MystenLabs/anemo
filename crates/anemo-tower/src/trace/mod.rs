@@ -283,7 +283,7 @@ mod on_response;
 mod service;
 
 const DEFAULT_MESSAGE_LEVEL: Level = Level::DEBUG;
-const DEFAULT_ERROR_LEVEL: Level = Level::ERROR;
+const DEFAULT_FAILURE_LEVEL: Level = Level::WARN;
 
 #[cfg(test)]
 mod tests {

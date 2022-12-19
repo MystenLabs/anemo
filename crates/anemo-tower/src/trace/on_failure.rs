@@ -1,4 +1,4 @@
-use super::{super::LatencyUnit, DEFAULT_ERROR_LEVEL};
+use super::{super::LatencyUnit, DEFAULT_FAILURE_LEVEL};
 use std::time::Duration;
 use tracing::{Level, Span};
 
@@ -49,7 +49,7 @@ pub struct DefaultOnFailure {
 impl Default for DefaultOnFailure {
     fn default() -> Self {
         Self {
-            level: DEFAULT_ERROR_LEVEL,
+            level: DEFAULT_FAILURE_LEVEL,
             latency_unit: LatencyUnit::Millis,
         }
     }

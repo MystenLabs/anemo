@@ -7,8 +7,10 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.2.1"
+dashmap = "5.4.0"
 futures = "0.3.21"
 pin-project-lite = "0.2.9"
+tokio = { version = "1.17.0", features = ["sync", "rt", "macros", "io-util"] }
 tower = { version = "0.4.12", features = ["full"] }
 tracing = "0.1.32"
 

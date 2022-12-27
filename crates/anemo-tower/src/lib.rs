@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod callback;
 pub mod classify;
+pub mod inflight_limit;
 pub mod request_id;
 pub mod set_header;
 pub mod trace;

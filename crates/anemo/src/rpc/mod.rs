@@ -57,6 +57,19 @@ impl Status {
         self.status
     }
 
+    pub fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
+        &mut self.headers
+    }
+
+    pub fn with_header<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
+        self.headers_mut().insert(key.into(), value.into());
+        self
+    }
+
     pub fn peer_id(&self) -> Option<&PeerId> {
         self.peer_id.as_ref()
     }

@@ -31,9 +31,9 @@ pub mod codegen {
         task::{Context, Poll},
     };
     pub use tower::{
-        layer::util::Stack,
+        layer::util::{Identity, Stack},
         util::{BoxLayer, BoxService},
-        Service,
+        Layer, Service,
     };
 
     pub type InboundRequestLayer<Req, Resp> = BoxLayer<

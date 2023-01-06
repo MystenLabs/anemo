@@ -80,7 +80,7 @@ pub fn generate(service: &Service) -> TokenStream {
                 pub fn from_arc(inner: Arc<T>) -> Self {
                     Self {
                         inner,
-                        #( #method_layer_names: InboundRequestLayer::new(tower::layer::util::Identity::new()), )*
+                        #( #method_layer_names: InboundRequestLayer::new(Identity::new()), )*
                     }
                 }
 
@@ -298,7 +298,6 @@ fn generate_method_route(method: &Method) -> TokenStream {
         let inner = self.inner.clone();
         let layer = self.#layer_name.clone();
         let fut = async move {
-            use tower::Layer;
             let method = layer.layer(BoxService::new(#service_ident(inner)));
             let codec = #codec_name::default();
 

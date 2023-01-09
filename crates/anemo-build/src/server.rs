@@ -298,7 +298,7 @@ fn generate_method_route(method: &Method) -> TokenStream {
         let inner = self.inner.clone();
         let layer = self.#layer_name.clone();
         let fut = async move {
-            let method = layer.layer(BoxService::new(#service_ident(inner)));
+            let method = layer.layer(BoxCloneService::new(#service_ident(inner)));
             let codec = #codec_name::default();
 
             let mut rpc = anemo::rpc::server::Rpc::new(codec);

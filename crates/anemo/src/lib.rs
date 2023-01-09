@@ -20,7 +20,10 @@ pub use async_trait::async_trait;
 
 #[doc(hidden)]
 pub mod codegen {
-    pub use super::{error::BoxError, types::response::IntoResponse, Request, Response};
+    pub use super::{
+        error::BoxError, middleware::box_clone_layer::BoxCloneLayer, types::response::IntoResponse,
+        Request, Response,
+    };
     pub use async_trait::async_trait;
     pub use bytes::Bytes;
     pub use futures::future::BoxFuture;
@@ -32,12 +35,12 @@ pub mod codegen {
     };
     pub use tower::{
         layer::util::{Identity, Stack},
-        util::{BoxLayer, BoxService},
+        util::BoxCloneService,
         Layer, Service,
     };
 
-    pub type InboundRequestLayer<Req, Resp> = BoxLayer<
-        BoxService<crate::Request<Req>, crate::Response<Resp>, crate::rpc::Status>,
+    pub type InboundRequestLayer<Req, Resp> = BoxCloneLayer<
+        BoxCloneService<crate::Request<Req>, crate::Response<Resp>, crate::rpc::Status>,
         crate::Request<Req>,
         crate::Response<Resp>,
         crate::rpc::Status,

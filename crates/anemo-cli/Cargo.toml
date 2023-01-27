@@ -1,0 +1,23 @@
+[package]
+name = "anemo-cli"
+version = "0.0.0"
+license = "Apache-2.0 OR MIT"
+authors = [ "Andrew Schran <aschran@mystenlabs.com>" ]
+edition = "2021"
+
+[dependencies]
+bytes = "1.2.1"
+clap = { version = "4.1.4", features = ["derive"] }
+dashmap = "5.4.0"
+rand = "0.8.5"
+tokio = { version = "1.17.0", features = ["sync", "rt", "macros", "io-util"] }
+tower = { version = "0.4.12", features = ["full"] }
+tracing = "0.1.32"
+
+anemo = { path = "../anemo" }
+anemo-tower = { path = "../anemo-tower" }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
+tokio = { version = "1.21.1", features = ["full"] }
+once_cell = "1.15.0"

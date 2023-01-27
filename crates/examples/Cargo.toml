@@ -9,11 +9,13 @@ edition = "2021"
 [dependencies]
 serde = { version = "1.0.142", features = ["derive"] }
 anemo = { path = "../anemo" }
+anemo-cli = { path = "../anemo-cli" }
 anemo-tower = { path = "../anemo-tower" }
 tokio = { version = "1.20.1", features = ["full"] }
 tower = { version = "0.4.12", features = ["full"] }
 futures = "0.3.21"
 rand = "0.8.5"
+ron = "0.8.0"
 tracing = "0.1.32"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
 

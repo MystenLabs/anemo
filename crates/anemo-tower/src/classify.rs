@@ -104,7 +104,7 @@ impl fmt::Display for StatusInRangeFailureClass {
                 }
                 Ok(())
             }
-            Self::Error(error) => write!(f, "Error: {}", error),
+            Self::Error(error) => write!(f, "Error: {error}"),
         }
     }
 }

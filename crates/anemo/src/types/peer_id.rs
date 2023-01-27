@@ -22,7 +22,7 @@ impl std::fmt::Display for PeerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let len = f.precision().unwrap_or(PEER_ID_LENGTH);
         for byte in self.0.iter().take(len) {
-            write!(f, "{:02x}", byte)?;
+            write!(f, "{byte:02x}")?;
         }
         Ok(())
     }
@@ -30,7 +30,7 @@ impl std::fmt::Display for PeerId {
 
 impl std::fmt::Debug for PeerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PeerId({})", self)
+        write!(f, "PeerId({self})")
     }
 }
 

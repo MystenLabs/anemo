@@ -69,7 +69,7 @@ impl Router {
             try_downcast::<Route, _>(service).unwrap_or_else(|service| Route::new(service));
 
         if let Err(err) = self.matcher.insert(path, id) {
-            panic!("Invalid route: {}", err);
+            panic!("Invalid route: {err}");
         }
 
         self.routes.insert(id, service);

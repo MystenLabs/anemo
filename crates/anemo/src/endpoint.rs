@@ -303,8 +303,8 @@ mod test {
             assert_eq!(connection_2.peer_id(), peer_id_1);
             assert_ne!(connection_1.stable_id(), connection_2.stable_id());
 
-            println!("connection_1: {:#?}", connection_1);
-            println!("connection_2: {:#?}", connection_2);
+            println!("connection_1: {connection_1:#?}");
+            println!("connection_2: {connection_2:#?}");
 
             let req_1 = async move {
                 let mut recv = connection_1.accept_uni().await.unwrap();

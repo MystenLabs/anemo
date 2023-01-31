@@ -17,9 +17,9 @@ impl Config {
         }
     }
 
-    pub fn add_service(mut self, name: String, info: ServiceInfo) -> Self {
+    pub fn add_service(mut self, name: &str, info: ServiceInfo) -> Self {
         assert!(
-            self.service_map.insert(name, info).is_none(),
+            self.service_map.insert(name.to_string(), info).is_none(),
             "no duplicate services"
         );
         self
@@ -44,9 +44,11 @@ impl ServiceInfo {
         }
     }
 
-    pub fn add_method(mut self, name: String, method_fn: MethodFn) -> Self {
+    pub fn add_method(mut self, name: &str, method_fn: MethodFn) -> Self {
         assert!(
-            self.method_map.insert(name, method_fn).is_none(),
+            self.method_map
+                .insert(name.to_string(), method_fn)
+                .is_none(),
             "no duplicate methods"
         );
         self
@@ -56,6 +58,37 @@ impl Default for ServiceInfo {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Creates a default MethodFn implementation using RON (Rusty Object Notation) format to
+/// parse requests and display responses.
+///
+/// # Arguments
+///
+/// * `client_type` - The generated client struct to use, e.g. `MyServiceClient`
+/// * `method_name` - The RPC method to call, e.g. `my_method`
+/// * `request_type` - The type of the RPC request message, e.g. `MyMethodRequest`
+#[macro_export]
+macro_rules! ron_method {
+    ($client_type: ident, $method_name: ident, $request_type: ident) => {
+        Box::new(|peer, request_str| {
+            async move {
+                let request: $request_type =
+                    ron::from_str(request_str.as_str()).expect("request text parses");
+                let mut client = $client_type::new(peer);
+                match client.$method_name(request).await {
+                    Ok(response) => format!(
+                        "successful response:\n{}",
+                        ron::to_string(response.body()).unwrap_or_else(|err| format!(
+                            "error converting response to text format: {err:?}"
+                        ))
+                    ),
+                    Err(status) => format!("error response:\n{status:?}"),
+                }
+            }
+            .boxed()
+        })
+    };
 }
 
 #[derive(Parser)]

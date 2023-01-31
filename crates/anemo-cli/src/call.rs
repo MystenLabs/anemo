@@ -1,38 +1,28 @@
 use crate::{util, Config};
-use anemo::Network;
-use anemo_tower::trace::TraceLayer;
 
 pub async fn run(
     config: Config,
-    address: Box<str>,
-    server_name: String,
-    service_name: String,
-    method_name: String,
+    address: &str,
+    server_name: &str,
+    service_name: &str,
+    method_name: &str,
     request: String,
 ) {
-    let network = Network::bind("localhost:0")
-        .private_key(util::random_key())
-        .server_name(server_name)
-        .outbound_request_layer(TraceLayer::new_for_client_and_server_errors())
-        .start(tower::service_fn(util::noop_handle))
-        .unwrap();
-
-    let peer_id = match network.connect(address).await {
-        Ok(peer_id) => peer_id,
+    let (network, peer) = match util::create_client_network(address, server_name).await {
+        Ok((network, peer)) => (network, peer),
         Err(e) => {
-            println!("error connecting: {e:?}");
+            println!("connection error: {e:?}");
             return;
         }
     };
-
-    let peer = network.peer(peer_id).expect("just-connected peer is found");
+    let peer_id = peer.peer_id();
 
     let method_fn = config
         .service_map
-        .get(&service_name)
+        .get(service_name)
         .expect("service is configured")
         .method_map
-        .get(&method_name)
+        .get(method_name)
         .expect("method is configured");
     let result = (method_fn)(peer, request).await;
     println!("{result}");

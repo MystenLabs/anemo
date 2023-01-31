@@ -70,7 +70,7 @@ enum Commands {
     /// Connects to the indicated peer without doing anything.
     Ping {
         /// Address of the target to connect to.
-        address: Box<str>,
+        address: String,
 
         /// `server_name` to use for the Anemo network.
         #[arg(long)]
@@ -80,7 +80,7 @@ enum Commands {
     /// Sends an RPC to a peer.
     Call {
         /// Address of the target to connect to.
-        address: Box<str>,
+        address: String,
 
         /// `server_name` to use for the Anemo network.
         #[arg(long)]
@@ -107,7 +107,7 @@ pub async fn main(config: Config) {
             address,
             server_name,
         } => {
-            ping::run(address, server_name).await;
+            ping::run(address.as_str(), server_name.as_str()).await;
         }
         Commands::Call {
             address,
@@ -118,10 +118,10 @@ pub async fn main(config: Config) {
         } => {
             call::run(
                 config,
-                address,
-                server_name,
-                service_name,
-                method_name,
+                address.as_str(),
+                server_name.as_str(),
+                service_name.as_str(),
+                method_name.as_str(),
                 request,
             )
             .await;

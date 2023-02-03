@@ -1,5 +1,4 @@
 use examples::{HelloRequest, HelloResponse};
-use futures::FutureExt;
 use greeter::greeter_client::GreeterClient;
 mod greeter {
     include!(concat!(env!("OUT_DIR"), "/example.helloworld.Greeter.rs"));

@@ -72,6 +72,7 @@ impl Default for ServiceInfo {
 macro_rules! ron_method {
     ($client_type: path, $method_name: ident, $request_type: path) => {
         Box::new(|peer, request_str| {
+            use futures::FutureExt;
             async move {
                 let request: $request_type =
                     ron::from_str(request_str.as_str()).expect("request text parses");

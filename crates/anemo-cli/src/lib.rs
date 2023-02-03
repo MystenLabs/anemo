@@ -70,12 +70,15 @@ impl Default for ServiceInfo {
 /// * `request_type` - The type of the RPC request message, e.g. `MyMethodRequest`
 #[macro_export]
 macro_rules! ron_method {
-    ($client_type: ident, $method_name: ident, $request_type: ident) => {
+    ($client_type: path, $method_name: ident, $request_type: path) => {
         Box::new(|peer, request_str| {
             async move {
                 let request: $request_type =
                     ron::from_str(request_str.as_str()).expect("request text parses");
-                let mut client = $client_type::new(peer);
+                let mut client = {
+                    use $client_type as client_type;
+                    client_type::new(peer)
+                };
                 match client.$method_name(request).await {
                     Ok(response) => format!(
                         "successful response:\n{}",

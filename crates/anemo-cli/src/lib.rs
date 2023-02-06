@@ -70,7 +70,7 @@ impl Default for ServiceInfo {
 /// * `request_type` - The type of the RPC request message, e.g. `MyMethodRequest`
 #[macro_export]
 macro_rules! ron_method {
-    ($client_type: path, $method_name: ident, $request_type: path) => {
+    ($client_type: ty, $method_name: ident, $request_type: ty) => {
         Box::new(|peer, request_str| {
             use futures::FutureExt;
             async move {

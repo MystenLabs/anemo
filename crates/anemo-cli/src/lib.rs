@@ -95,9 +95,11 @@ macro_rules! ron_method {
     };
 }
 
+/// This struct can be used if you want to embed Anemo CLI functionality into an
+/// existing clap binary.
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
@@ -138,7 +140,12 @@ enum Commands {
 /// application-specific initialization is complete.
 pub async fn main(config: Config) {
     let cli = Cli::parse();
+    run(config, cli).await
+}
 
+/// Call this function to execute anemo CLI commands if you are embedding into an existing
+/// clap binary.
+pub async fn run(config: Config, cli: Cli) {
     match cli.command {
         Commands::Ping {
             address,

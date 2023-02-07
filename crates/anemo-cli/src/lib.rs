@@ -102,8 +102,7 @@ struct Cli {
     args: Args,
 }
 
-/// This struct can be used if you want to embed Anemo CLI functionality into an
-/// existing clap binary.
+/// Network tools for interacting with Anemo servers
 #[derive(clap::Args)]
 pub struct Args {
     #[command(subcommand)]

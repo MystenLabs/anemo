@@ -1,5 +1,6 @@
 use crate::error::BoxError;
 
+pub use self::bcs::BcsCodec;
 pub use self::bincode::BincodeCodec;
 pub use json::JsonCodec;
 
@@ -112,6 +113,71 @@ mod json {
 
         fn decoder(&mut self) -> Self::Decoder {
             JsonDecoder(PhantomData)
+        }
+    }
+}
+
+mod bcs {
+    use super::{Codec, Decoder, Encoder};
+    use bytes::BufMut;
+    use std::marker::PhantomData;
+
+    #[derive(Debug)]
+    pub struct BcsEncoder<T>(PhantomData<T>);
+
+    impl<T: serde::Serialize> Encoder for BcsEncoder<T> {
+        type Item = T;
+        type Error = bcs::Error;
+
+        fn encode(
+            &mut self,
+            item: Self::Item,
+            buf: &mut bytes::BytesMut,
+        ) -> Result<(), Self::Error> {
+            bcs::serialize_into(&mut buf.writer(), &item)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct BcsDecoder<U>(PhantomData<U>);
+
+    impl<U: serde::de::DeserializeOwned> Decoder for BcsDecoder<U> {
+        type Item = U;
+        type Error = bcs::Error;
+
+        fn decode(&mut self, buf: bytes::Bytes) -> Result<Self::Item, Self::Error> {
+            bcs::from_bytes(&buf)
+        }
+    }
+
+    /// A [`Codec`] that implements `bcs` encoding/decoding via the serde library.
+    #[derive(Debug, Clone)]
+    pub struct BcsCodec<T, U>(PhantomData<(T, U)>);
+
+    impl<T, U> Default for BcsCodec<T, U> {
+        fn default() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    impl<T, U> Codec for BcsCodec<T, U>
+    where
+        T: serde::Serialize + Send + 'static,
+        U: serde::de::DeserializeOwned + Send + 'static,
+    {
+        const FORMAT_NAME: &'static str = "bcs";
+
+        type Encode = T;
+        type Decode = U;
+        type Encoder = BcsEncoder<T>;
+        type Decoder = BcsDecoder<U>;
+
+        fn encoder(&mut self) -> Self::Encoder {
+            BcsEncoder(PhantomData)
+        }
+
+        fn decoder(&mut self) -> Self::Decoder {
+            BcsDecoder(PhantomData)
         }
     }
 }

@@ -250,6 +250,16 @@ impl QuicConfig {
     pub(crate) fn transport_config(&self) -> quinn::TransportConfig {
         let mut config = quinn::TransportConfig::default();
 
+        // 50MB per stream.
+        const STREAM_RWND: u64 = 50 << 20;
+        // Assume committee size of 200.
+        const NUM_STREAMS: u64 = 200;
+
+        config.stream_receive_window((STREAM_RWND).try_into().unwrap());
+        config.receive_window((NUM_STREAMS * STREAM_RWND).try_into().unwrap());
+        config.send_window(NUM_STREAMS * STREAM_RWND);
+        config.crypto_buffer_size(1 << 20);
+
         if let Some(max) = self
             .max_concurrent_bidi_streams
             .map(|n| VarInt::try_from(n).unwrap_or(VarInt::MAX))

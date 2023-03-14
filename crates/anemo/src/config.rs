@@ -147,26 +147,26 @@ pub struct QuicConfig {
     ///
     /// If unspecified, this will default to 1.25MB.
     #[serde(skip_serializing_if = "Option::is_none")]
-    stream_receive_window: Option<u64>,
+    pub stream_receive_window: Option<u64>,
 
     /// Maximum number of bytes a peer may transmit across all streams of a connection before
     /// becoming blocked.
     ///
     /// If unspecified, this will default to unlimited.
     #[serde(skip_serializing_if = "Option::is_none")]
-    receive_window: Option<u64>,
+    pub receive_window: Option<u64>,
 
     /// Maximum number of bytes to transmit to a peer without acknowledgment
     ///
     /// If unspecified, this will default to 10MB.
     #[serde(skip_serializing_if = "Option::is_none")]
-    send_window: Option<u64>,
+    pub send_window: Option<u64>,
 
     /// Maximum quantity of out-of-order crypto layer data to buffer
     ///
     /// If unspecified, this will default to 16KiB.
     #[serde(skip_serializing_if = "Option::is_none")]
-    crypto_buffer_size: Option<usize>,
+    pub crypto_buffer_size: Option<usize>,
 
     /// How long to wait to hear from a peer before timing out a connection.
     ///

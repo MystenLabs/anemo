@@ -3,7 +3,7 @@ use crate::{
     PeerId, Result,
 };
 use pkcs8::EncodePrivateKey;
-use quinn::VarInt;
+use quinn::{congestion, VarInt};
 use rcgen::{CertificateParams, KeyPair, SignatureAlgorithm};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
@@ -341,6 +341,12 @@ impl QuicConfig {
         if let Some(keep_alive_interval) = self.keep_alive_interval_ms.map(Duration::from_millis) {
             config.keep_alive_interval(Some(keep_alive_interval));
         }
+
+        let mut cc_config = congestion::NewRenoConfig::default();
+        cc_config.loss_reduction_factor(0.7);
+        cc_config.initial_window(4 << 20);
+        cc_config.minimum_window(1 << 20);
+        config.congestion_controller_factory(Arc::new(cc_config));
 
         config
     }

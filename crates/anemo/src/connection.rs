@@ -1,5 +1,6 @@
 use crate::{ConnectionOrigin, PeerId, Result};
 use quinn::{ConnectionError, RecvStream};
+use quinn_proto::ConnectionStats;
 use std::{
     fmt, io,
     net::SocketAddr,
@@ -74,6 +75,11 @@ impl Connection {
     #[allow(unused)]
     pub fn rtt(&self) -> Duration {
         self.inner.rtt()
+    }
+
+    /// Returns connection statistics
+    pub fn stats(&self) -> ConnectionStats {
+        self.inner.stats()
     }
 
     /// The peer's UDP address

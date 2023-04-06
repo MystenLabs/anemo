@@ -85,8 +85,21 @@ impl InboundRequestHandler {
                     }
                 },
                 Some(completed_request) = inflight_requests.join_next() => {
-                    // If a task panics, just propagate it
-                    completed_request.unwrap();
+                    match completed_request {
+                        Ok(()) => {
+                            trace!("request handler task completed");
+                        },
+                        Err(e) => {
+                            if e.is_cancelled() {
+                                trace!("request handler task was cancelled");
+                            } else if e.is_panic() {
+                                // If a task panics, just propagate it
+                                std::panic::resume_unwind(e.into_panic());
+                            } else {
+                                panic!("request handler task failed: {e}");
+                            }
+                        },
+                    };
                 },
             }
         }

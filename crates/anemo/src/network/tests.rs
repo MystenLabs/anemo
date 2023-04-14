@@ -108,7 +108,7 @@ async fn connect_with_invalid_peer_id_ensure_server_doesnt_succeed() -> Result<(
         subscriber_2.recv().await,
         Ok(PeerEvent::LostPeer(
             network_3.peer_id(),
-            crate::types::DisconnectReason::ConnectionLost
+            crate::types::DisconnectReason::LocallyClosed
         )),
     );
     assert_eq!(
@@ -272,7 +272,7 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
     drop(network_3);
 
     assert_eq!(
-        PeerEvent::LostPeer(peer_id_3, crate::types::DisconnectReason::ConnectionLost),
+        PeerEvent::LostPeer(peer_id_3, crate::types::DisconnectReason::ApplicationClosed),
         subscriber_1.recv().await?
     );
 
@@ -412,7 +412,7 @@ async fn basic_connectivity_check() -> Result<()> {
         subscriber_1.recv().await?
     );
     assert_eq!(
-        LostPeer(peer_id_1, DisconnectReason::ConnectionLost),
+        LostPeer(peer_id_1, DisconnectReason::ApplicationClosed),
         subscriber_2.recv().await?
     );
 

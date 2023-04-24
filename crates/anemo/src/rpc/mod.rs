@@ -114,7 +114,7 @@ pub mod client {
         Status,
     };
     use crate::{error::BoxError, Request, Response};
-    use bytes::{Bytes, BytesMut};
+    use bytes::Bytes;
     use tower::Service;
 
     #[derive(Debug, Clone)]
@@ -168,17 +168,16 @@ pub mod client {
                 // Set the content type
                 parts.headers.insert(
                     crate::types::header::CONTENT_TYPE.to_owned(),
-                    C::FORMAT_NAME.to_owned(),
+                    codec.format_name().to_owned(),
                 );
 
-                let mut bytes = BytesMut::new();
                 let mut encoder = codec.encoder();
-                encoder
-                    .encode(body, &mut bytes)
+                let bytes = encoder
+                    .encode(body)
                     .map_err(Into::into)
                     .map_err(Status::from_error)?;
 
-                Request::from_parts(parts, bytes.freeze())
+                Request::from_parts(parts, bytes)
             };
 
             let response = self
@@ -212,7 +211,7 @@ pub mod client {
 }
 
 pub mod server {
-    use bytes::{Bytes, BytesMut};
+    use bytes::Bytes;
     use tower::Service;
 
     use crate::{rpc::codec::Decoder, types::response::IntoResponse, Request, Response};
@@ -223,22 +222,27 @@ pub mod server {
     };
     use std::future::Future;
 
-    pub struct Rpc<T> {
-        codec: T,
+    pub struct Rpc<T1, T2> {
+        request_codec: T1,
+        response_codec: T2,
     }
 
-    impl<T> Rpc<T>
+    impl<T1, T2> Rpc<T1, T2>
     where
-        T: Codec,
+        T1: Codec,
+        T2: Codec,
     {
-        pub fn new(codec: T) -> Self {
-            Self { codec }
+        pub fn new(request_codec: T1, response_codec: T2) -> Self {
+            Self {
+                request_codec,
+                response_codec,
+            }
         }
 
         /// Handle a single unary RPC request.
         pub async fn unary<S>(&mut self, mut service: S, request: Request<Bytes>) -> Response<Bytes>
         where
-            S: UnaryService<T::Decode, Response = T::Encode>,
+            S: UnaryService<T1::Decode, Response = T2::Encode>,
         {
             let request = match self.map_request(request).await {
                 Ok(r) => r,
@@ -255,10 +259,10 @@ pub mod server {
         async fn map_request(
             &mut self,
             request: Request<Bytes>,
-        ) -> Result<Request<T::Decode>, Status> {
+        ) -> Result<Request<T1::Decode>, Status> {
             let (parts, body) = request.into_parts();
 
-            let mut decoder = self.codec.decoder();
+            let mut decoder = self.request_codec.decoder();
             let message = decoder
                 .decode(body)
                 .map_err(Into::into)
@@ -271,7 +275,7 @@ pub mod server {
 
         fn map_response(
             &mut self,
-            response: Result<crate::Response<T::Encode>, Status>,
+            response: Result<crate::Response<T2::Encode>, Status>,
         ) -> Response<Bytes> {
             let response = match response {
                 Ok(r) => r,
@@ -283,21 +287,20 @@ pub mod server {
             // Set the content type
             parts.headers.insert(
                 crate::types::header::CONTENT_TYPE.to_owned(),
-                T::FORMAT_NAME.to_owned(),
+                self.response_codec.format_name().to_owned(),
             );
 
-            let mut bytes = BytesMut::new();
-            let mut encoder = self.codec.encoder();
-
-            if let Err(status) = encoder
-                .encode(body, &mut bytes)
+            let mut encoder = self.response_codec.encoder();
+            let bytes = match encoder
+                .encode(body)
                 .map_err(Into::into)
                 .map_err(|err| Status::internal(format!("Error encoding: {err}")))
             {
-                return status.into_response();
-            }
+                Ok(bytes) => bytes,
+                Err(status) => return status.into_response(),
+            };
 
-            Response::from_parts(parts, bytes.freeze())
+            Response::from_parts(parts, bytes)
         }
     }
 

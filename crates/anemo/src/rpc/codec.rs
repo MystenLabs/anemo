@@ -1,12 +1,11 @@
 use crate::error::BoxError;
 
 pub use self::bincode::BincodeCodec;
+pub use identity::IdentityCodec;
 pub use json::JsonCodec;
 
 /// Trait that knows how to encode and decode RPC messages.
-pub trait Codec: Default {
-    const FORMAT_NAME: &'static str;
-
+pub trait Codec {
     /// The encodable message.
     type Encode: Send + 'static;
     /// The decodable message.
@@ -21,6 +20,9 @@ pub trait Codec: Default {
     fn encoder(&mut self) -> Self::Encoder;
     /// Fetch the decoder.
     fn decoder(&mut self) -> Self::Decoder;
+
+    /// Return the format name.
+    fn format_name(&self) -> &'static str;
 }
 
 /// Encodes RPC message types
@@ -34,7 +36,7 @@ pub trait Encoder {
     type Error: Into<BoxError>;
 
     /// Encodes a message into the provided buffer.
-    fn encode(&mut self, item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error>;
+    fn encode(&mut self, item: Self::Item) -> Result<bytes::Bytes, Self::Error>;
 }
 
 /// Decodes RPC message types
@@ -63,12 +65,10 @@ mod json {
         type Item = T;
         type Error = serde_json::Error;
 
-        fn encode(
-            &mut self,
-            item: Self::Item,
-            buf: &mut bytes::BytesMut,
-        ) -> Result<(), Self::Error> {
-            serde_json::to_writer(buf.writer(), &item)
+        fn encode(&mut self, item: Self::Item) -> Result<bytes::Bytes, Self::Error> {
+            let mut buf = bytes::BytesMut::new();
+            serde_json::to_writer(buf.as_mut().writer(), &item)?;
+            Ok(buf.freeze())
         }
     }
 
@@ -99,8 +99,6 @@ mod json {
         T: serde::Serialize + Send + 'static,
         U: serde::de::DeserializeOwned + Send + 'static,
     {
-        const FORMAT_NAME: &'static str = "json";
-
         type Encode = T;
         type Decode = U;
         type Encoder = JsonEncoder<T>;
@@ -112,6 +110,10 @@ mod json {
 
         fn decoder(&mut self) -> Self::Decoder {
             JsonDecoder(PhantomData)
+        }
+
+        fn format_name(&self) -> &'static str {
+            "json"
         }
     }
 }
@@ -128,12 +130,10 @@ mod bincode {
         type Item = T;
         type Error = bincode::Error;
 
-        fn encode(
-            &mut self,
-            item: Self::Item,
-            buf: &mut bytes::BytesMut,
-        ) -> Result<(), Self::Error> {
-            bincode::serialize_into(buf.writer(), &item)
+        fn encode(&mut self, item: Self::Item) -> Result<bytes::Bytes, Self::Error> {
+            let mut buf = bytes::BytesMut::new();
+            bincode::serialize_into(buf.as_mut().writer(), &item)?;
+            Ok(buf.freeze())
         }
     }
 
@@ -164,8 +164,6 @@ mod bincode {
         T: serde::Serialize + Send + 'static,
         U: serde::de::DeserializeOwned + Send + 'static,
     {
-        const FORMAT_NAME: &'static str = "bincode";
-
         type Encode = T;
         type Decode = U;
         type Encoder = BincodeEncoder<T>;
@@ -177,6 +175,69 @@ mod bincode {
 
         fn decoder(&mut self) -> Self::Decoder {
             BincodeDecoder(PhantomData)
+        }
+
+        fn format_name(&self) -> &'static str {
+            "bincode"
+        }
+    }
+}
+
+mod identity {
+    use super::{Codec, Decoder, Encoder};
+    use std::convert::Infallible;
+
+    pub struct IdentityEncoder;
+
+    impl Encoder for IdentityEncoder {
+        type Item = bytes::Bytes;
+        type Error = Infallible;
+
+        fn encode(&mut self, item: Self::Item) -> Result<bytes::Bytes, Self::Error> {
+            Ok(item)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct IdentityDecoder;
+
+    impl Decoder for IdentityDecoder {
+        type Item = bytes::Bytes;
+        type Error = Infallible;
+
+        fn decode(&mut self, buf: bytes::Bytes) -> Result<Self::Item, Self::Error> {
+            Ok(buf)
+        }
+    }
+
+    /// A [`Codec`] that does nothing.
+    #[derive(Debug, Clone)]
+    pub struct IdentityCodec {
+        format_name: &'static str,
+    }
+
+    impl IdentityCodec {
+        pub fn new(format_name: &'static str) -> Self {
+            Self { format_name }
+        }
+    }
+
+    impl Codec for IdentityCodec {
+        type Encode = bytes::Bytes;
+        type Decode = bytes::Bytes;
+        type Encoder = IdentityEncoder;
+        type Decoder = IdentityDecoder;
+
+        fn encoder(&mut self) -> Self::Encoder {
+            IdentityEncoder
+        }
+
+        fn decoder(&mut self) -> Self::Decoder {
+            IdentityDecoder
+        }
+
+        fn format_name(&self) -> &'static str {
+            self.format_name
         }
     }
 }

@@ -28,7 +28,13 @@ pub fn generate(service: &Service) -> TokenStream {
     let method_response_types: Vec<_> = service
         .methods()
         .iter()
-        .map(|method| method.response_type())
+        .map(|method| {
+            if method.server_handler_use_raw_bytes() {
+                quote! { bytes::Bytes }
+            } else {
+                method.response_type()
+            }
+        })
         .collect();
     let add_layer_function_names: Vec<_> = service
         .methods()
@@ -176,7 +182,11 @@ fn generate_trait_methods(service: &Service) -> TokenStream {
         let name = quote::format_ident!("{}", method.name());
 
         let request = method.request_type();
-        let response = method.response_type();
+        let response = if method.server_handler_use_raw_bytes() {
+            quote! { bytes::Bytes }
+        } else {
+            method.response_type()
+        };
 
         let method_doc = generate_doc_comments(method.comment());
 
@@ -223,7 +233,11 @@ fn generate_method_service(method: &Method, server_trait: Ident) -> TokenStream 
     let service_ident = quote::format_ident!("{}Svc", method.identifier());
 
     let request = method.request_type();
-    let response = method.response_type();
+    let response = if method.server_handler_use_raw_bytes() {
+        quote! { bytes::Bytes }
+    } else {
+        method.response_type()
+    };
 
     quote! {
         #[allow(non_camel_case_types)]
@@ -291,17 +305,33 @@ fn generate_method_routes(service: &Service) -> TokenStream {
 fn generate_method_route(method: &Method) -> TokenStream {
     let codec_name = syn::parse_str::<syn::Path>(method.codec_path()).unwrap();
 
+    let response_type = method.response_type();
+    let request_type = method.request_type();
+
     let layer_name = quote::format_ident!("{}_layer", method.name());
     let service_ident = quote::format_ident!("{}Svc", method.identifier());
+
+    let codec_init = if method.server_handler_use_raw_bytes() {
+        quote! {
+            let request_codec = #codec_name::<#response_type, #request_type>::default();
+            let response_codec =
+                anemo::rpc::codec::IdentityCodec::new(request_codec.format_name());
+        }
+    } else {
+        quote! {
+            let request_codec = #codec_name::default();
+            let response_codec = #codec_name::default();
+        }
+    };
 
     quote! {
         let inner = self.inner.clone();
         let layer = self.#layer_name.clone();
         let fut = async move {
             let method = layer.layer(BoxCloneService::new(#service_ident(inner)));
-            let codec = #codec_name::default();
+            #codec_init
 
-            let mut rpc = anemo::rpc::server::Rpc::new(codec);
+            let mut rpc = anemo::rpc::server::Rpc::new(request_codec, response_codec);
 
             let res = rpc.unary(method, req).await;
             Ok(res)

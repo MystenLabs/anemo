@@ -21,8 +21,8 @@ pub use async_trait::async_trait;
 #[doc(hidden)]
 pub mod codegen {
     pub use super::{
-        error::BoxError, middleware::box_clone_layer::BoxCloneLayer, types::response::IntoResponse,
-        Request, Response,
+        error::BoxError, middleware::box_clone_layer::BoxCloneLayer, rpc::codec::Codec,
+        types::response::IntoResponse, Request, Response,
     };
     pub use async_trait::async_trait;
     pub use bytes::Bytes;

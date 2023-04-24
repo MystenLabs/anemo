@@ -176,6 +176,8 @@ pub struct Method {
     response_type: String,
     /// The path to the codec to use for this method
     codec_path: String,
+    /// Use raw (serialized) bytes for the server-side response handler.
+    server_handler_use_raw_bytes: bool,
 }
 
 impl Method {
@@ -210,6 +212,10 @@ impl Method {
         syn::parse_str::<syn::Type>(&self.response_type)
             .unwrap()
             .to_token_stream()
+    }
+
+    pub fn server_handler_use_raw_bytes(&self) -> bool {
+        self.server_handler_use_raw_bytes
     }
 }
 
@@ -246,6 +252,8 @@ pub struct MethodBuilder {
     response_type: Option<String>,
     /// The path to the codec to use for this method
     codec_path: Option<String>,
+    /// Use raw (serialized) bytes for the server-side response handler.
+    server_handler_use_raw_bytes: bool,
 }
 
 impl MethodBuilder {
@@ -296,6 +304,12 @@ impl MethodBuilder {
         self
     }
 
+    /// Set whether or not the server handler should use raw bytes for the response.
+    pub fn server_handler_use_raw_bytes(mut self, use_raw_bytes: bool) -> Self {
+        self.server_handler_use_raw_bytes = use_raw_bytes;
+        self
+    }
+
     /// Build a Method
     ///
     /// Panics if `name`, `route_name`, `request_type`, `response_type`, or `codec_path` weren't set.
@@ -307,6 +321,7 @@ impl MethodBuilder {
             request_type: self.request_type.unwrap(),
             response_type: self.response_type.unwrap(),
             codec_path: self.codec_path.unwrap(),
+            server_handler_use_raw_bytes: self.server_handler_use_raw_bytes,
         }
     }
 }

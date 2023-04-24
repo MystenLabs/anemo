@@ -10,6 +10,7 @@ fn main() {
                 .response_type("crate::HelloResponse")
                 .codec_path("anemo::rpc::codec::BincodeCodec")
                 // .codec_path("anemo::rpc::codec::JsonCodec")
+                .server_handler_use_raw_bytes(true)
                 .build(),
         )
         .build();

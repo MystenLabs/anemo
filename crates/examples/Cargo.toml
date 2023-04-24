@@ -11,6 +11,8 @@ serde = { version = "1.0.142", features = ["derive"] }
 anemo = { path = "../anemo" }
 anemo-cli = { path = "../anemo-cli" }
 anemo-tower = { path = "../anemo-tower" }
+bincode = "1.3.3"
+bytes = { version = "1.1.0", features = ["serde"] }
 tokio = { version = "1.20.1", features = ["full"] }
 tower = { version = "0.4.12", default-features = false, features = ["full"] }
 futures = "0.3.21"

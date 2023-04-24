@@ -110,10 +110,12 @@ pub(crate) async fn write_response<T: AsyncWrite + Unpin>(
     // Write Version Frame
     write_version_frame(send_stream.get_mut(), response.version()).await?;
 
+    // We keep extensions alive so that any RAII objects contained therein
+    // are not dropped until the response is sent.
     let (parts, body) = response.into_parts();
+    let (raw_header, _extensions) = RawResponseHeader::from_header(parts);
 
     // Write Request Header
-    let raw_header = RawResponseHeader::from_header(parts);
     let mut buf = BytesMut::new();
     bincode::serialize_into((&mut buf).writer(), &raw_header)
         .expect("serialization should not fail");

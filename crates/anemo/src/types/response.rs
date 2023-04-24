@@ -37,11 +37,14 @@ pub(crate) struct RawResponseHeader {
 }
 
 impl RawResponseHeader {
-    pub fn from_header(header: ResponseHeader) -> Self {
-        Self {
-            status: header.status.to_u16(),
-            headers: header.headers,
-        }
+    pub fn from_header(header: ResponseHeader) -> (Self, Extensions) {
+        (
+            Self {
+                status: header.status.to_u16(),
+                headers: header.headers,
+            },
+            header.extensions,
+        )
     }
 }
 

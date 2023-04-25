@@ -29,7 +29,7 @@ pub fn generate(service: &Service) -> TokenStream {
         .methods()
         .iter()
         .map(|method| {
-            if method.server_handler_use_raw_bytes() {
+            if method.server_handler_return_raw_bytes() {
                 quote! { bytes::Bytes }
             } else {
                 method.response_type()
@@ -182,7 +182,7 @@ fn generate_trait_methods(service: &Service) -> TokenStream {
         let name = quote::format_ident!("{}", method.name());
 
         let request = method.request_type();
-        let response = if method.server_handler_use_raw_bytes() {
+        let response = if method.server_handler_return_raw_bytes() {
             quote! { bytes::Bytes }
         } else {
             method.response_type()
@@ -233,7 +233,7 @@ fn generate_method_service(method: &Method, server_trait: Ident) -> TokenStream 
     let service_ident = quote::format_ident!("{}Svc", method.identifier());
 
     let request = method.request_type();
-    let response = if method.server_handler_use_raw_bytes() {
+    let response = if method.server_handler_return_raw_bytes() {
         quote! { bytes::Bytes }
     } else {
         method.response_type()
@@ -311,7 +311,7 @@ fn generate_method_route(method: &Method) -> TokenStream {
     let layer_name = quote::format_ident!("{}_layer", method.name());
     let service_ident = quote::format_ident!("{}Svc", method.identifier());
 
-    let codec_init = if method.server_handler_use_raw_bytes() {
+    let codec_init = if method.server_handler_return_raw_bytes() {
         quote! {
             let request_codec = #codec_name::<#response_type, #request_type>::default();
             let response_codec =

@@ -177,7 +177,7 @@ pub struct Method {
     /// The path to the codec to use for this method
     codec_path: String,
     /// Use raw (serialized) bytes for the server-side response handler.
-    server_handler_use_raw_bytes: bool,
+    server_handler_return_raw_bytes: bool,
 }
 
 impl Method {
@@ -214,8 +214,8 @@ impl Method {
             .to_token_stream()
     }
 
-    pub fn server_handler_use_raw_bytes(&self) -> bool {
-        self.server_handler_use_raw_bytes
+    pub fn server_handler_return_raw_bytes(&self) -> bool {
+        self.server_handler_return_raw_bytes
     }
 }
 
@@ -253,7 +253,7 @@ pub struct MethodBuilder {
     /// The path to the codec to use for this method
     codec_path: Option<String>,
     /// Use raw (serialized) bytes for the server-side response handler.
-    server_handler_use_raw_bytes: bool,
+    server_handler_return_raw_bytes: bool,
 }
 
 impl MethodBuilder {
@@ -305,8 +305,8 @@ impl MethodBuilder {
     }
 
     /// Set whether or not the server handler should use raw bytes for the response.
-    pub fn server_handler_use_raw_bytes(mut self, use_raw_bytes: bool) -> Self {
-        self.server_handler_use_raw_bytes = use_raw_bytes;
+    pub fn server_handler_return_raw_bytes(mut self, use_raw_bytes: bool) -> Self {
+        self.server_handler_return_raw_bytes = use_raw_bytes;
         self
     }
 
@@ -321,7 +321,7 @@ impl MethodBuilder {
             request_type: self.request_type.unwrap(),
             response_type: self.response_type.unwrap(),
             codec_path: self.codec_path.unwrap(),
-            server_handler_use_raw_bytes: self.server_handler_use_raw_bytes,
+            server_handler_return_raw_bytes: self.server_handler_return_raw_bytes,
         }
     }
 }

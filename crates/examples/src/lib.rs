@@ -40,7 +40,7 @@ impl Greeter for MyGreeter {
         };
 
         // Manually serializing the response here to show an example of a server handler using
-        // the `server_handler_use_raw_bytes` option.
+        // the `server_handler_return_raw_bytes` option.
         let mut reply_bytes = bytes::BytesMut::new();
         bincode::serialize_into(reply_bytes.as_mut().writer(), &reply)
             .map_err(|e| anemo::rpc::Status::from_error(e.into()))?;

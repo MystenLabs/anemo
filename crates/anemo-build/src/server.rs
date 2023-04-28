@@ -319,8 +319,8 @@ fn generate_method_route(method: &Method) -> TokenStream {
         }
     } else {
         quote! {
-            let request_codec = #codec_name::default();
-            let response_codec = #codec_name::default();
+            let request_codec = #codec_name::<#response_type, #request_type>::default();
+            let response_codec = #codec_name::<#response_type, #request_type>::default();
         }
     };
 

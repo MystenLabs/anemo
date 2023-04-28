@@ -1,5 +1,4 @@
 use anemo::{rpc::Status, Request, Response};
-use bytes::BufMut;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -29,7 +28,7 @@ impl Greeter for MyGreeter {
     async fn say_hello(
         &self,
         request: Request<HelloRequest>,
-    ) -> Result<Response<bytes::Bytes>, Status> {
+    ) -> Result<Response<HelloResponse>, Status> {
         info!(
             "Got a request from {}",
             request.peer_id().unwrap().short_display(4)
@@ -39,11 +38,12 @@ impl Greeter for MyGreeter {
             message: format!("Hello {}!", request.into_body().name),
         };
 
-        // Manually serializing the response here to show an example of a server handler using
-        // the `server_handler_return_raw_bytes` option.
-        let mut reply_bytes = bytes::BytesMut::new();
-        bincode::serialize_into(reply_bytes.as_mut().writer(), &reply)
-            .map_err(|e| anemo::rpc::Status::from_error(e.into()))?;
-        Ok(Response::new(reply_bytes.freeze()))
+        Ok(Response::new(reply))
+
+        // Example for a server handler using the `server_handler_return_raw_bytes` option.
+        // let mut reply_bytes = bytes::BytesMut::new();
+        // bincode::serialize_into(reply_bytes.as_mut().writer(), &reply)
+        //     .map_err(|e| anemo::rpc::Status::from_error(e.into()))?;
+        // Ok(Response::new(reply_bytes.freeze()))
     }
 }

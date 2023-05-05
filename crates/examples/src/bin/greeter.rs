@@ -23,6 +23,7 @@ async fn main() {
 
     let network_2_addr = network_2.local_addr();
 
+    let _network_2_handle = network_2.clone(); // keep network_2 alive until end of main
     let handle = tokio::spawn(async move {
         let (mut receiver, mut peers) = network_2.subscribe().unwrap();
 

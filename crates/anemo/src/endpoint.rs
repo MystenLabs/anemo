@@ -2,6 +2,7 @@ use crate::{
     config::EndpointConfig, connection::Connection, types::Address, ConnectionOrigin, PeerId,
     Result,
 };
+use std::sync::Arc;
 use std::time::Duration;
 use std::{
     future::Future,
@@ -33,7 +34,7 @@ impl Endpoint {
             config.quinn_endpoint_config(),
             Some(server_config),
             socket,
-            quinn::TokioRuntime,
+            Arc::new(quinn::TokioRuntime),
         )?;
 
         let endpoint = Self {

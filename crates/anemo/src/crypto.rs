@@ -1,6 +1,7 @@
+use anyhow::anyhow;
 use std::sync::Arc;
 
-use crate::PeerId;
+use crate::{error::AsStdError, PeerId};
 
 static SUPPORTED_SIG_ALGS: &[&webpki::SignatureAlgorithm] = &[&webpki::ED25519];
 
@@ -132,7 +133,11 @@ impl rustls::client::ServerCertVerifier for ExpectedCertVerifier {
 
         if peer_id != self.1 {
             return Err(rustls::Error::InvalidCertificate(
-                rustls::CertificateError::NotValidForName,
+                rustls::CertificateError::Other(Arc::new(AsStdError::from(anyhow!(
+                    "invalid peer certificate: received {:?} instead of expected {:?}",
+                    peer_id,
+                    self.1,
+                )))),
             ));
         }
 
@@ -182,7 +187,9 @@ fn pki_error(error: webpki::Error) -> rustls::Error {
         | UnsupportedSignatureAlgorithmForPublicKey => {
             rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature)
         }
-        e => rustls::Error::InvalidCertificate(rustls::CertificateError::Other(Arc::new(e))),
+        e => rustls::Error::InvalidCertificate(rustls::CertificateError::Other(Arc::new(
+            AsStdError::from(anyhow!("invalid peer certificate: {e}")),
+        ))),
     }
 }
 
@@ -197,7 +204,9 @@ pub(crate) fn peer_id_from_certificate(
     let public_key_bytes =
         <ed25519::pkcs8::PublicKeyBytes as pkcs8::DecodePublicKey>::from_public_key_der(spki.raw)
             .map_err(|e| {
-            rustls::Error::InvalidCertificate(rustls::CertificateError::Other(Arc::new(e)))
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Other(Arc::new(
+                AsStdError::from(anyhow!("invalid ed25519 public key: {e}")),
+            )))
         })?;
 
     let peer_id = PeerId(public_key_bytes.to_bytes());

@@ -11,7 +11,7 @@ async fn noop_handle(_request: Request<Bytes>) -> Result<Response<Bytes>, Infall
 pub async fn create_client_network(address: &str, server_name: &str) -> Result<(Network, Peer)> {
     let network = Network::bind("0.0.0.0:0")
         .private_key(random_key())
-        .primary_server_name(server_name)
+        .server_name(server_name)
         .outbound_request_layer(TraceLayer::new_for_client_and_server_errors())
         .start(tower::service_fn(noop_handle))
         .unwrap();

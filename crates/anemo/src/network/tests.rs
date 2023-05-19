@@ -157,7 +157,7 @@ async fn max_concurrent_connections_0() -> Result<()> {
     };
     let network_1 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test")
+        .server_name("test")
         .config(config)
         .start(echo_service())?;
 
@@ -182,7 +182,7 @@ async fn max_concurrent_connections_1() -> Result<()> {
     };
     let network_1 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test")
+        .server_name("test")
         .config(config)
         .start(echo_service())?;
 
@@ -286,7 +286,7 @@ fn build_network() -> Result<Network> {
 fn build_network_with_addr(addr: &str) -> Result<Network> {
     let network = Network::bind(addr)
         .random_private_key()
-        .primary_server_name("test")
+        .server_name("test")
         .start(echo_service())?;
 
     trace!(
@@ -425,15 +425,15 @@ async fn test_network_isolation() -> Result<()> {
 
     let network_1 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test1")
+        .server_name("test1")
         .start(echo_service())?;
     let network_2 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test2")
+        .server_name("test2")
         .start(echo_service())?;
     let network_3 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test2")
+        .server_name("test2")
         .start(echo_service())?;
 
     assert!(network_2.connect(network_1.local_addr()).await.is_err());
@@ -443,16 +443,16 @@ async fn test_network_isolation() -> Result<()> {
 
     let network_4 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test3")
-        .secondary_server_name("test3dot1")
+        .server_name("test3")
+        .alternate_server_name("test3dot1")
         .start(echo_service())?;
     let network_5 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test3")
+        .server_name("test3")
         .start(echo_service())?;
     let network_6 = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test3dot1")
+        .server_name("test3dot1")
         .start(echo_service())?;
 
     // network_4 and network_5 talk to each other with "test3"
@@ -494,7 +494,7 @@ async fn drop_shutdown() -> Result<()> {
 
     let network = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test")
+        .server_name("test")
         .start(service)?;
 
     let network_2 = build_network()?;
@@ -551,7 +551,7 @@ async fn explicit_shutdown() -> Result<()> {
 
     let network = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test")
+        .server_name("test")
         .start(service)?;
 
     let network_2 = build_network()?;
@@ -652,7 +652,7 @@ async fn early_termination_of_request_handlers() {
 
     let network = Network::bind("localhost:0")
         .random_private_key()
-        .primary_server_name("test")
+        .server_name("test")
         .start(service)
         .unwrap();
 
@@ -739,7 +739,7 @@ async fn user_provided_client_service_layer() {
 
         (
             Network::bind("localhost:0")
-                .primary_server_name("test")
+                .server_name("test")
                 .outbound_request_layer(client_layer)
                 .random_private_key()
                 .start(server_layer.layer(echo_service()))
@@ -795,7 +795,7 @@ async fn network_ref_via_extension() -> Result<()> {
     });
 
     let network_1 = Network::bind("localhost:0")
-        .primary_server_name("test")
+        .server_name("test")
         .random_private_key()
         .start(svc)?;
     let network_2 = build_network()?;

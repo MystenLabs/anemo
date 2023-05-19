@@ -7,7 +7,7 @@ static SUPPORTED_SIG_ALGS: &[&webpki::SignatureAlgorithm] = &[&webpki::ED25519];
 
 #[derive(Clone, Debug)]
 pub(crate) struct CertVerifier {
-    pub server_names: Vec<String>,
+    pub(crate) server_names: Vec<String>,
 }
 
 /// A `ClientCertVerifier` that will ensure that every client provides a valid, expected
@@ -95,8 +95,7 @@ impl rustls::client::ServerCertVerifier for CertVerifier {
             _ => return Err(rustls::Error::UnsupportedNameType),
         };
         // Client server_name needs to match one of our server_names
-        let _ = self
-            .server_names
+        self.server_names
             .iter()
             .find(
                 |name| match webpki::DnsNameRef::try_from_ascii_str(name.as_ref()) {

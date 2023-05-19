@@ -336,12 +336,12 @@ pub(crate) struct EndpointConfigBuilder {
     /// Note that the end-entity certificate must have the
     /// [Subject Alternative Name](https://tools.ietf.org/html/rfc6125#section-4.1)
     /// extension to describe, e.g., the valid DNS name.
-    pub primary_server_name: Option<String>,
+    pub server_name: Option<String>,
 
-    /// Server accepts both `primary_server_name` and `secondary_server_name`
-    /// connections from clients. However client only uses `primary_server_name` when
+    /// Server accepts both `server_name` and `alternate_server_name`
+    /// connections from clients. However client only uses `server_name` when
     /// initiating outbound connections.
-    pub secondary_server_name: Option<String>,
+    pub alternate_server_name: Option<String>,
 
     pub transport_config: Option<quinn::TransportConfig>,
 }
@@ -351,13 +351,13 @@ impl EndpointConfigBuilder {
         Default::default()
     }
 
-    pub fn primary_server_name<T: Into<String>>(mut self, server_name: T) -> Self {
-        self.primary_server_name = Some(server_name.into());
+    pub fn server_name<T: Into<String>>(mut self, server_name: T) -> Self {
+        self.server_name = Some(server_name.into());
         self
     }
 
-    pub fn secondary_server_name<T: Into<String>>(mut self, server_name: Option<T>) -> Self {
-        self.secondary_server_name = server_name.map(Into::into);
+    pub fn alternate_server_name<T: Into<String>>(mut self, server_name: Option<T>) -> Self {
+        self.alternate_server_name = server_name.map(Into::into);
         self
     }
 
@@ -392,7 +392,7 @@ impl EndpointConfigBuilder {
         let reset_key = crate::crypto::construct_reset_key(&keypair.secret_key);
         let quinn_endpoint_config = quinn::EndpointConfig::new(Arc::new(reset_key));
 
-        let primary_server_name = self.primary_server_name.unwrap();
+        let primary_server_name = self.server_name.unwrap();
         let transport_config = Arc::new(self.transport_config.unwrap_or_default());
 
         let cert_verifier = Arc::new(CertVerifier {
@@ -400,7 +400,7 @@ impl EndpointConfigBuilder {
         });
         let (primary_certificate, pkcs8_der) = Self::generate_cert(&keypair, &primary_server_name);
 
-        // Client only uses `primary_server_name` when initiating outbound connections
+        // Client only uses the primary `server_name` when initiating outbound connections
         // so only needs the primary certificate.
         let client_config = Self::client_config(
             primary_certificate.clone(),
@@ -409,18 +409,18 @@ impl EndpointConfigBuilder {
             transport_config.clone(),
         )?;
 
-        let secondary_server_name = self.secondary_server_name;
-        let server_config = match secondary_server_name {
-            Some(secondary_server_name) => {
-                let (secondary_certificate, _) =
-                    Self::generate_cert(&keypair, &secondary_server_name);
+        let alternate_server_name = self.alternate_server_name;
+        let server_config = match alternate_server_name {
+            Some(alternate_server_name) => {
+                let (alternate_certificate, _) =
+                    Self::generate_cert(&keypair, &alternate_server_name);
                 let cert_verifier = Arc::new(CertVerifier {
-                    server_names: vec![primary_server_name.clone(), secondary_server_name.clone()],
+                    server_names: vec![primary_server_name.clone(), alternate_server_name.clone()],
                 });
                 Self::server_config(
                     vec![
                         (primary_server_name.clone(), primary_certificate.clone()),
-                        (secondary_server_name, secondary_certificate),
+                        (alternate_server_name, alternate_certificate),
                     ],
                     pkcs8_der.clone(),
                     cert_verifier,
@@ -443,7 +443,7 @@ impl EndpointConfigBuilder {
             pkcs8_der,
             quinn_server_config: server_config,
             quinn_client_config: client_config,
-            primary_server_name,
+            server_name: primary_server_name,
             transport_config,
             quinn_endpoint_config,
         })
@@ -513,7 +513,7 @@ pub(crate) struct EndpointConfig {
     /// Note that the end-entity certificate must have the
     /// [Subject Alternative Name](https://tools.ietf.org/html/rfc6125#section-4.1)
     /// extension to describe, e.g., the valid DNS name.
-    pub primary_server_name: String,
+    server_name: String,
 
     transport_config: Arc<quinn::TransportConfig>,
     quinn_endpoint_config: quinn::EndpointConfig,
@@ -528,8 +528,8 @@ impl EndpointConfig {
         self.peer_id
     }
 
-    pub fn primary_server_name(&self) -> &str {
-        &self.primary_server_name
+    pub fn server_name(&self) -> &str {
+        &self.server_name
     }
 
     pub fn quinn_endpoint_config(&self) -> quinn::EndpointConfig {
@@ -550,7 +550,7 @@ impl EndpointConfig {
     ) -> quinn::ClientConfig {
         let server_cert_verifier = ExpectedCertVerifier(
             CertVerifier {
-                server_names: vec![self.primary_server_name().into()],
+                server_names: vec![self.server_name().into()],
             },
             peer_id,
         );
@@ -572,7 +572,7 @@ impl EndpointConfig {
     pub(crate) fn random(server_name: &str) -> Self {
         Self::builder()
             .random_private_key()
-            .primary_server_name(server_name)
+            .server_name(server_name)
             .build()
             .unwrap()
     }

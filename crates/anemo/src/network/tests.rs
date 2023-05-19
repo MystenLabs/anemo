@@ -157,7 +157,7 @@ async fn max_concurrent_connections_0() -> Result<()> {
     };
     let network_1 = Network::bind("localhost:0")
         .random_private_key()
-        .server_name("test")
+        .primary_server_name("test")
         .config(config)
         .start(echo_service())?;
 
@@ -182,7 +182,7 @@ async fn max_concurrent_connections_1() -> Result<()> {
     };
     let network_1 = Network::bind("localhost:0")
         .random_private_key()
-        .server_name("test")
+        .primary_server_name("test")
         .config(config)
         .start(echo_service())?;
 
@@ -286,7 +286,7 @@ fn build_network() -> Result<Network> {
 fn build_network_with_addr(addr: &str) -> Result<Network> {
     let network = Network::bind(addr)
         .random_private_key()
-        .server_name("test")
+        .primary_server_name("test")
         .start(echo_service())?;
 
     trace!(
@@ -419,6 +419,57 @@ async fn basic_connectivity_check() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_network_isolation() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let network_1 = Network::bind("localhost:0")
+        .random_private_key()
+        .primary_server_name("test1")
+        .start(echo_service())?;
+    let network_2 = Network::bind("localhost:0")
+        .random_private_key()
+        .primary_server_name("test2")
+        .start(echo_service())?;
+    let network_3 = Network::bind("localhost:0")
+        .random_private_key()
+        .primary_server_name("test2")
+        .start(echo_service())?;
+
+    assert!(network_2.connect(network_1.local_addr()).await.is_err());
+    assert!(network_1.connect(network_2.local_addr()).await.is_err());
+    assert!(network_2.connect(network_3.local_addr()).await.is_ok());
+    assert!(network_2.connect(network_2.local_addr()).await.is_ok());
+
+    let network_4 = Network::bind("localhost:0")
+        .random_private_key()
+        .primary_server_name("test3")
+        .secondary_server_name("test3dot1")
+        .start(echo_service())?;
+    let network_5 = Network::bind("localhost:0")
+        .random_private_key()
+        .primary_server_name("test3")
+        .start(echo_service())?;
+    let network_6 = Network::bind("localhost:0")
+        .random_private_key()
+        .primary_server_name("test3dot1")
+        .start(echo_service())?;
+
+    // network_4 and network_5 talk to each other with "test3"
+    assert!(network_4.connect(network_5.local_addr()).await.is_ok());
+    assert!(network_5.connect(network_4.local_addr()).await.is_ok());
+
+    // network_4 accepts "test3dot1" as server but can't init connection to network_6 as client
+    assert!(network_4.connect(network_6.local_addr()).await.is_err());
+    assert!(network_6.connect(network_4.local_addr()).await.is_ok());
+
+    // network_5 and network_6 can't talk to each other
+    assert!(network_5.connect(network_6.local_addr()).await.is_err());
+    assert!(network_6.connect(network_5.local_addr()).await.is_err());
+
+    Ok(())
+}
+
 // Ensure that when all Network handles are dropped that the network is shutdown
 #[tokio::test]
 async fn drop_shutdown() -> Result<()> {
@@ -443,7 +494,7 @@ async fn drop_shutdown() -> Result<()> {
 
     let network = Network::bind("localhost:0")
         .random_private_key()
-        .server_name("test")
+        .primary_server_name("test")
         .start(service)?;
 
     let network_2 = build_network()?;
@@ -500,7 +551,7 @@ async fn explicit_shutdown() -> Result<()> {
 
     let network = Network::bind("localhost:0")
         .random_private_key()
-        .server_name("test")
+        .primary_server_name("test")
         .start(service)?;
 
     let network_2 = build_network()?;
@@ -601,7 +652,7 @@ async fn early_termination_of_request_handlers() {
 
     let network = Network::bind("localhost:0")
         .random_private_key()
-        .server_name("test")
+        .primary_server_name("test")
         .start(service)
         .unwrap();
 
@@ -688,7 +739,7 @@ async fn user_provided_client_service_layer() {
 
         (
             Network::bind("localhost:0")
-                .server_name("test")
+                .primary_server_name("test")
                 .outbound_request_layer(client_layer)
                 .random_private_key()
                 .start(server_layer.layer(echo_service()))
@@ -744,7 +795,7 @@ async fn network_ref_via_extension() -> Result<()> {
     });
 
     let network_1 = Network::bind("localhost:0")
-        .server_name("test")
+        .primary_server_name("test")
         .random_private_key()
         .start(svc)?;
     let network_2 = build_network()?;

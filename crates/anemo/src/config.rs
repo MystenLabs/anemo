@@ -333,12 +333,15 @@ pub(crate) struct EndpointConfigBuilder {
     /// Ed25519 Private Key
     pub private_key: Option<[u8; 32]>,
 
-    // TODO Maybe use server name to identify the network name?
-    //
     /// Note that the end-entity certificate must have the
     /// [Subject Alternative Name](https://tools.ietf.org/html/rfc6125#section-4.1)
     /// extension to describe, e.g., the valid DNS name.
-    pub server_name: Option<String>,
+    pub primary_server_name: Option<String>,
+
+    /// Server accepts both `primary_server_name` and `secondary_server_name`
+    /// connections from clients. However client only uses `primary_server_name` when
+    /// initiating outbound connections.
+    pub secondary_server_name: Option<String>,
 
     pub transport_config: Option<quinn::TransportConfig>,
 }
@@ -348,8 +351,13 @@ impl EndpointConfigBuilder {
         Default::default()
     }
 
-    pub fn server_name<T: Into<String>>(mut self, server_name: T) -> Self {
-        self.server_name = Some(server_name.into());
+    pub fn primary_server_name<T: Into<String>>(mut self, server_name: T) -> Self {
+        self.primary_server_name = Some(server_name.into());
+        self
+    }
+
+    pub fn secondary_server_name<T: Into<String>>(mut self, server_name: Option<T>) -> Self {
+        self.secondary_server_name = server_name.map(Into::into);
         self
     }
 
@@ -384,34 +392,58 @@ impl EndpointConfigBuilder {
         let reset_key = crate::crypto::construct_reset_key(&keypair.secret_key);
         let quinn_endpoint_config = quinn::EndpointConfig::new(Arc::new(reset_key));
 
-        let server_name = self.server_name.unwrap();
+        let primary_server_name = self.primary_server_name.unwrap();
         let transport_config = Arc::new(self.transport_config.unwrap_or_default());
 
-        let cert_verifier = Arc::new(CertVerifier(server_name.clone()));
-        let (certificate, pkcs8_der) = Self::generate_cert(&keypair, &server_name);
+        let cert_verifier = Arc::new(CertVerifier {
+            server_names: vec![primary_server_name.clone()],
+        });
+        let (primary_certificate, pkcs8_der) = Self::generate_cert(&keypair, &primary_server_name);
 
-        let server_config = Self::server_config(
-            certificate.clone(),
+        // Client only uses `primary_server_name` when initiating outbound connections
+        // so only needs the primary certificate.
+        let client_config = Self::client_config(
+            primary_certificate.clone(),
             pkcs8_der.clone(),
             cert_verifier.clone(),
             transport_config.clone(),
         )?;
-        let client_config = Self::client_config(
-            certificate.clone(),
-            pkcs8_der.clone(),
-            cert_verifier,
-            transport_config.clone(),
-        )?;
 
-        let peer_id = crate::crypto::peer_id_from_certificate(&certificate).unwrap();
+        let secondary_server_name = self.secondary_server_name;
+        let server_config = match secondary_server_name {
+            Some(secondary_server_name) => {
+                let (secondary_certificate, _) =
+                    Self::generate_cert(&keypair, &secondary_server_name);
+                let cert_verifier = Arc::new(CertVerifier {
+                    server_names: vec![primary_server_name.clone(), secondary_server_name.clone()],
+                });
+                Self::server_config(
+                    vec![
+                        (primary_server_name.clone(), primary_certificate.clone()),
+                        (secondary_server_name, secondary_certificate),
+                    ],
+                    pkcs8_der.clone(),
+                    cert_verifier,
+                    transport_config.clone(),
+                )
+            }
+            _ => Self::server_config(
+                vec![(primary_server_name.clone(), primary_certificate.clone())],
+                pkcs8_der.clone(),
+                cert_verifier,
+                transport_config.clone(),
+            ),
+        }?;
+
+        let peer_id = crate::crypto::peer_id_from_certificate(&primary_certificate).unwrap();
 
         Ok(EndpointConfig {
             peer_id,
-            certificate,
+            client_certificate: primary_certificate,
             pkcs8_der,
             quinn_server_config: server_config,
             quinn_client_config: client_config,
-            server_name,
+            primary_server_name,
             transport_config,
             quinn_endpoint_config,
         })
@@ -429,15 +461,23 @@ impl EndpointConfigBuilder {
     }
 
     fn server_config(
-        cert: rustls::Certificate,
+        certs: Vec<(String, rustls::Certificate)>,
         pkcs8_der: rustls::PrivateKey,
         cert_verifier: Arc<CertVerifier>,
         transport_config: Arc<quinn::TransportConfig>,
     ) -> Result<quinn::ServerConfig> {
+        let mut server_cert_resolver = rustls::server::ResolvesServerCertUsingSni::new();
+        let key = rustls::sign::any_supported_type(&pkcs8_der)
+            .map_err(|_| anyhow::anyhow!("invalid private key"))?;
+        for (server_name, cert) in certs {
+            let certified_key = rustls::sign::CertifiedKey::new(vec![cert], key.clone());
+            server_cert_resolver.add(&server_name, certified_key)?;
+        }
+
         let server_crypto = rustls::ServerConfig::builder()
             .with_safe_defaults()
             .with_client_cert_verifier(cert_verifier)
-            .with_single_cert(vec![cert], pkcs8_der)?;
+            .with_cert_resolver(Arc::new(server_cert_resolver));
 
         let mut server = quinn::ServerConfig::with_crypto(Arc::new(server_crypto));
         server.transport = transport_config;
@@ -464,7 +504,8 @@ impl EndpointConfigBuilder {
 #[derive(Debug)]
 pub(crate) struct EndpointConfig {
     peer_id: PeerId,
-    certificate: rustls::Certificate,
+    // Store client certificate for outbound connections initiation
+    client_certificate: rustls::Certificate,
     pkcs8_der: rustls::PrivateKey,
     quinn_server_config: quinn::ServerConfig,
     quinn_client_config: quinn::ClientConfig,
@@ -472,7 +513,7 @@ pub(crate) struct EndpointConfig {
     /// Note that the end-entity certificate must have the
     /// [Subject Alternative Name](https://tools.ietf.org/html/rfc6125#section-4.1)
     /// extension to describe, e.g., the valid DNS name.
-    server_name: String,
+    pub primary_server_name: String,
 
     transport_config: Arc<quinn::TransportConfig>,
     quinn_endpoint_config: quinn::EndpointConfig,
@@ -487,8 +528,8 @@ impl EndpointConfig {
         self.peer_id
     }
 
-    pub fn server_name(&self) -> &str {
-        &self.server_name
+    pub fn primary_server_name(&self) -> &str {
+        &self.primary_server_name
     }
 
     pub fn quinn_endpoint_config(&self) -> quinn::EndpointConfig {
@@ -507,12 +548,19 @@ impl EndpointConfig {
         &self,
         peer_id: PeerId,
     ) -> quinn::ClientConfig {
-        let server_cert_verifier =
-            ExpectedCertVerifier(CertVerifier(self.server_name().into()), peer_id);
+        let server_cert_verifier = ExpectedCertVerifier(
+            CertVerifier {
+                server_names: vec![self.primary_server_name().into()],
+            },
+            peer_id,
+        );
         let client_crypto = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_custom_certificate_verifier(Arc::new(server_cert_verifier))
-            .with_single_cert(vec![self.certificate.clone()], self.pkcs8_der.clone())
+            .with_single_cert(
+                vec![self.client_certificate.clone()],
+                self.pkcs8_der.clone(),
+            )
             .unwrap();
 
         let mut client = quinn::ClientConfig::new(Arc::new(client_crypto));
@@ -524,7 +572,7 @@ impl EndpointConfig {
     pub(crate) fn random(server_name: &str) -> Self {
         Self::builder()
             .random_private_key()
-            .server_name(server_name)
+            .primary_server_name(server_name)
             .build()
             .unwrap()
     }

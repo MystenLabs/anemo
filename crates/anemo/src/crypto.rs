@@ -6,7 +6,9 @@ use crate::{error::AsStdError, PeerId};
 static SUPPORTED_SIG_ALGS: &[&webpki::SignatureAlgorithm] = &[&webpki::ED25519];
 
 #[derive(Clone, Debug)]
-pub(crate) struct CertVerifier(pub(crate) String);
+pub(crate) struct CertVerifier {
+    pub server_names: Vec<String>,
+}
 
 /// A `ClientCertVerifier` that will ensure that every client provides a valid, expected
 /// certificate, without any name checking.
@@ -52,9 +54,14 @@ impl rustls::server::ClientCertVerifier for CertVerifier {
             .map(|_| cert)?;
 
         // Ensure the cert is valid for the network name
-        let dns_nameref = webpki::DnsNameRef::try_from_ascii_str(&self.0)
+        let dns_name_refs = self
+            .server_names
+            .iter()
+            .map(|name| webpki::DnsNameRef::try_from_ascii_str(name.as_str()))
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|_| rustls::Error::UnsupportedNameType)?;
-        cert.verify_is_valid_for_dns_name(dns_nameref)
+
+        cert.verify_is_valid_for_at_least_one_dns_name(dns_name_refs.into_iter())
             .map_err(pki_error)
             .map(|_| rustls::server::ClientCertVerified::assertion())
     }
@@ -87,11 +94,20 @@ impl rustls::client::ServerCertVerifier for CertVerifier {
             }
             _ => return Err(rustls::Error::UnsupportedNameType),
         };
-        let expected_dns_nameref = webpki::DnsNameRef::try_from_ascii_str(&self.0)
-            .map_err(|_| rustls::Error::UnsupportedNameType)?;
-        if dns_nameref.as_ref() != expected_dns_nameref.as_ref() {
-            return Err(rustls::Error::UnsupportedNameType);
-        }
+        // Client server_name needs to match one of our server_names
+        let _ = self
+            .server_names
+            .iter()
+            .find(
+                |name| match webpki::DnsNameRef::try_from_ascii_str(name.as_ref()) {
+                    Ok(dns_name_ref) => dns_name_ref.as_ref() == dns_nameref.as_ref(),
+                    Err(_) => {
+                        tracing::error!("invalid dns name: {:?}", name);
+                        false
+                    }
+                },
+            )
+            .ok_or(rustls::Error::UnsupportedNameType)?;
 
         // Step 2: call verification from webpki
         let cert = cert

@@ -75,7 +75,7 @@ impl Endpoint {
         let addr = address.resolve()?;
 
         self.inner
-            .connect_with(config, addr, self.config.server_name())
+            .connect_with(config, addr, self.config.primary_server_name())
             .map_err(Into::into)
             .map(Connecting::new_outbound)
     }

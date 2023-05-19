@@ -40,7 +40,8 @@ type OutboundRequestLayer = BoxLayer<
 pub struct Builder {
     bind_address: Address,
     config: Option<Config>,
-    server_name: Option<String>,
+    primary_server_name: Option<String>,
+    secondary_server_name: Option<String>,
 
     /// Ed25519 Private Key
     private_key: Option<[u8; 32]>,
@@ -56,16 +57,24 @@ impl Builder {
         self
     }
 
-    /// Set the `server-name` that will be used when constructing a self-signed X.509 certificate to
+    /// Set the `primary-server-name` that will be used when constructing a self-signed X.509 certificate to
     /// be used in the TLS handshake.
     ///
-    /// Traditionally a `server-name` is intended to be the DNS name that is being dialed, although
+    /// Traditionally a server name is intended to be the DNS name that is being dialed, although
     /// since Anemo does not require parties to use DNS names, nor does it rely on a central CA,
-    /// `server-name` is instead used to identify the network name that this Peer can connect to.
+    /// `primary-server-name` is instead used to identify the network name that this Peer can connect to.
     /// In other words, The TLS handshake will only be successful if all parties use the same
-    /// `server-name`.
-    pub fn server_name<T: Into<String>>(mut self, server_name: T) -> Self {
-        self.server_name = Some(server_name.into());
+    /// `primary-server-name`.
+    pub fn primary_server_name<T: Into<String>>(mut self, server_name: T) -> Self {
+        self.primary_server_name = Some(server_name.into());
+        self
+    }
+
+    /// `secondary-server-name` helps with network namee migration.
+    /// Server accepts connections from both `primary-server-name` and `secondary-server-name`.
+    /// However client only initiates connection with `primary-server-name`.
+    pub fn secondary_server_name<T: Into<String>>(mut self, server_name: T) -> Self {
+        self.secondary_server_name = Some(server_name.into());
         self
     }
 
@@ -115,12 +124,14 @@ impl Builder {
         <T as Service<Request<Bytes>>>::Future: Send + 'static,
     {
         let config = self.config.unwrap_or_default();
-        let server_name = self.server_name.unwrap();
+        let primary_server_name = self.primary_server_name.unwrap();
+        let secondary_server_name = self.secondary_server_name;
         let private_key = self.private_key.unwrap();
 
         let endpoint_config = EndpointConfig::builder()
             .transport_config(config.transport_config())
-            .server_name(server_name)
+            .primary_server_name(primary_server_name)
+            .secondary_server_name(secondary_server_name)
             .private_key(private_key)
             .build()?;
         let socket = std::net::UdpSocket::bind(self.bind_address)?;
@@ -195,7 +206,8 @@ impl Network {
         Builder {
             bind_address: addr.into(),
             config: None,
-            server_name: None,
+            primary_server_name: None,
+            secondary_server_name: None,
             private_key: None,
             outbound_request_layer: None,
         }

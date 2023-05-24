@@ -7,6 +7,8 @@ use crate::{
 };
 use anyhow::anyhow;
 use bytes::Bytes;
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::ToSocketAddrs;
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tower::{
@@ -124,6 +126,7 @@ impl Builder {
         <T as Service<Request<Bytes>>>::Future: Send + 'static,
     {
         let config = self.config.unwrap_or_default();
+        let quic_config = config.quic.clone().unwrap_or_default();
         let primary_server_name = self.server_name.unwrap();
         let alternate_server_name = self.alternate_server_name;
         let private_key = self.private_key.unwrap();
@@ -134,11 +137,42 @@ impl Builder {
             .alternate_server_name(alternate_server_name)
             .private_key(private_key)
             .build()?;
-        let socket = std::net::UdpSocket::bind(self.bind_address)?;
-        let endpoint = Endpoint::new(endpoint_config, socket)?;
+
+        let addrs: Vec<_> = self.bind_address.to_socket_addrs()?.collect();
+        let socket = Socket::new(
+            Domain::for_address(
+                *addrs
+                    .first()
+                    .ok_or_else(|| anyhow!("could not resolve address {:?}", self.bind_address))?,
+            ),
+            Type::DGRAM,
+            Some(Protocol::UDP),
+        )?;
+        for addr in addrs {
+            socket.bind(&socket2::SockAddr::from(addr))?;
+        }
+        if let Some(send_buffer_size) = quic_config.socket_send_buffer_size {
+            socket.set_send_buffer_size(send_buffer_size)?;
+            let buf_size = socket.send_buffer_size()?;
+            if buf_size != send_buffer_size {
+                return Err(anyhow!(
+                    "failed to set socket send buffer size to {send_buffer_size}, got {buf_size}",
+                ));
+            }
+        }
+        if let Some(receive_buffer_size) = quic_config.socket_receive_buffer_size {
+            socket.set_recv_buffer_size(receive_buffer_size)?;
+            let buf_size = socket.recv_buffer_size()?;
+            if buf_size != receive_buffer_size {
+                return Err(anyhow!(
+                "failed to set socket receive buffer size to {receive_buffer_size}, got {buf_size}",
+            ));
+            }
+        }
+
+        let endpoint = Endpoint::new(endpoint_config, socket.into())?;
 
         let config = Arc::new(config);
-
         let endpoint = Arc::new(endpoint);
         let active_peers = ActivePeers::new(config.peer_event_broadcast_channel_capacity());
         let active_peers_ref = active_peers.downgrade();

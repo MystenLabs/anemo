@@ -186,6 +186,18 @@ pub struct QuicConfig {
     /// If unspecified, this will default to `None`, disabling keep-alives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_alive_interval_ms: Option<u64>,
+
+    /// Size of the send buffer on the UDP socket (`SO_SNDBUF`).
+    ///
+    /// If unspecified, this will use the operating system default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socket_send_buffer_size: Option<usize>,
+
+    /// Size of the receive buffer on the UDP socket (`SO_RCVBUF`).
+    ///
+    /// If unspecified, this will use the operating system default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub socket_receive_buffer_size: Option<usize>,
 }
 
 impl Config {

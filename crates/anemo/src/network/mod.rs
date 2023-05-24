@@ -139,18 +139,20 @@ impl Builder {
             .build()?;
 
         let addrs: Vec<_> = self.bind_address.to_socket_addrs()?.collect();
-        let socket = Socket::new(
-            Domain::for_address(
-                *addrs
-                    .first()
-                    .ok_or_else(|| anyhow!("could not resolve address {:?}", self.bind_address))?,
-            ),
-            Type::DGRAM,
-            Some(Protocol::UDP),
-        )?;
-        for addr in addrs {
-            socket.bind(&socket2::SockAddr::from(addr))?;
-        }
+        let socket = (|| {
+            let mut result = Err(anyhow!("no addresses to bind to"));
+            for addr in addrs.iter() {
+                let socket =
+                    Socket::new(Domain::for_address(*addr), Type::DGRAM, Some(Protocol::UDP))?;
+                result = socket
+                    .bind(&socket2::SockAddr::from(*addr))
+                    .map_err(|e| e.into());
+                if let Ok(()) = result {
+                    return Ok(socket);
+                }
+            }
+            Err(result.unwrap_err())
+        })()?;
         if let Some(send_buffer_size) = quic_config.socket_send_buffer_size {
             socket.set_send_buffer_size(send_buffer_size)?;
             let buf_size = socket.send_buffer_size()?;

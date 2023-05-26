@@ -156,7 +156,8 @@ impl Builder {
         if let Some(send_buffer_size) = quic_config.socket_send_buffer_size {
             socket.set_send_buffer_size(send_buffer_size)?;
             let buf_size = socket.send_buffer_size()?;
-            if buf_size != send_buffer_size {
+            if buf_size < send_buffer_size {
+                // Linux doubles requested size, so allow anything greater.
                 return Err(anyhow!(
                     "failed to set socket send buffer size to {send_buffer_size}, got {buf_size}",
                 ));
@@ -165,7 +166,8 @@ impl Builder {
         if let Some(receive_buffer_size) = quic_config.socket_receive_buffer_size {
             socket.set_recv_buffer_size(receive_buffer_size)?;
             let buf_size = socket.recv_buffer_size()?;
-            if buf_size != receive_buffer_size {
+            if buf_size < receive_buffer_size {
+                // Linux doubles requested size, so allow anything greater.
                 return Err(anyhow!(
                 "failed to set socket receive buffer size to {receive_buffer_size}, got {buf_size}",
             ));

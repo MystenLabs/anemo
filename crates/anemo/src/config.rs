@@ -198,6 +198,12 @@ pub struct QuicConfig {
     /// If unspecified, this will use the operating system default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub socket_receive_buffer_size: Option<usize>,
+
+    /// Size of the receive buffer on the UDP socket (`SO_RCVBUF`).
+    ///
+    /// If unspecified, this will use the operating system default.
+    #[serde(default)]
+    pub allow_failed_socket_buffer_size_setting: bool,
 }
 
 impl Config {

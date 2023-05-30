@@ -15,6 +15,7 @@ use tower::{
     util::{BoxLayer, BoxService},
     Layer, Service, ServiceBuilder, ServiceExt,
 };
+use tracing::warn;
 
 mod connection_manager;
 pub use connection_manager::KnownPeers;
@@ -158,9 +159,14 @@ impl Builder {
             let buf_size = socket.send_buffer_size()?;
             if buf_size < send_buffer_size {
                 // Linux doubles requested size, so allow anything greater.
-                return Err(anyhow!(
+                let msg = format!(
                     "failed to set socket send buffer size to {send_buffer_size}, got {buf_size}",
-                ));
+                );
+                if quic_config.allow_failed_socket_buffer_size_setting {
+                    warn!(msg);
+                } else {
+                    return Err(anyhow!(msg));
+                }
             }
         }
         if let Some(receive_buffer_size) = quic_config.socket_receive_buffer_size {
@@ -168,9 +174,14 @@ impl Builder {
             let buf_size = socket.recv_buffer_size()?;
             if buf_size < receive_buffer_size {
                 // Linux doubles requested size, so allow anything greater.
-                return Err(anyhow!(
-                "failed to set socket receive buffer size to {receive_buffer_size}, got {buf_size}",
-            ));
+                let msg = format!(
+                    "failed to set socket receive buffer size to {receive_buffer_size}, got {buf_size}",
+                );
+                if quic_config.allow_failed_socket_buffer_size_setting {
+                    warn!(msg);
+                } else {
+                    return Err(anyhow!(msg));
+                }
             }
         }
 

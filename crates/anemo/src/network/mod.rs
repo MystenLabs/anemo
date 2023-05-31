@@ -154,22 +154,28 @@ impl Builder {
             }
             Err(result.unwrap_err())
         })()?;
-        if let Some(send_buffer_size) = quic_config.socket_send_buffer_size {
-            socket.set_send_buffer_size(send_buffer_size)?;
-            let buf_size = socket.send_buffer_size()?;
-            if buf_size < send_buffer_size {
-                // Linux doubles requested size, so allow anything greater.
-                let msg = format!(
-                    "failed to set socket send buffer size to {send_buffer_size}, got {buf_size}",
+        let socket_send_buf_size =
+            if let Some(send_buffer_size) = quic_config.socket_send_buffer_size {
+                socket.set_send_buffer_size(send_buffer_size)?;
+                let buf_size = socket.send_buffer_size()?;
+                if buf_size < send_buffer_size {
+                    // Linux doubles requested size, so allow anything greater.
+                    let msg = format!(
+                    "failed to set socket send buffer size to {send_buffer_size}, got {buf_size}"
                 );
-                if quic_config.allow_failed_socket_buffer_size_setting {
-                    warn!(msg);
-                } else {
-                    return Err(anyhow!(msg));
+                    if quic_config.allow_failed_socket_buffer_size_setting {
+                        warn!(msg);
+                    } else {
+                        return Err(anyhow!(msg));
+                    }
                 }
-            }
-        }
-        if let Some(receive_buffer_size) = quic_config.socket_receive_buffer_size {
+                buf_size
+            } else {
+                socket.send_buffer_size()?
+            };
+        let socket_receive_buf_size = if let Some(receive_buffer_size) =
+            quic_config.socket_receive_buffer_size
+        {
             socket.set_recv_buffer_size(receive_buffer_size)?;
             let buf_size = socket.recv_buffer_size()?;
             if buf_size < receive_buffer_size {
@@ -183,7 +189,10 @@ impl Builder {
                     return Err(anyhow!(msg));
                 }
             }
-        }
+            buf_size
+        } else {
+            socket.recv_buffer_size()?
+        };
 
         let endpoint = Endpoint::new(endpoint_config, socket.into())?;
 
@@ -235,6 +244,8 @@ impl Builder {
                 known_peers,
                 connection_manager_handle,
                 outbound_request_layer,
+                socket_send_buf_size,
+                socket_receive_buf_size,
             }
         });
 
@@ -326,6 +337,16 @@ impl Network {
     pub fn is_closed(&self) -> bool {
         self.0.is_closed()
     }
+
+    /// Returns the size of the network's UDP socket send buffer.
+    pub fn socket_send_buf_size(&self) -> usize {
+        self.0.socket_send_buf_size()
+    }
+
+    /// Returns the size of the network's UDP socket receive buffer.
+    pub fn socket_receive_buf_size(&self) -> usize {
+        self.0.socket_receive_buf_size()
+    }
 }
 
 struct NetworkInner {
@@ -336,6 +357,9 @@ struct NetworkInner {
     connection_manager_handle: mpsc::Sender<ConnectionManagerRequest>,
 
     outbound_request_layer: OutboundRequestLayer,
+
+    socket_send_buf_size: usize,
+    socket_receive_buf_size: usize,
 }
 
 impl NetworkInner {
@@ -409,6 +433,14 @@ impl NetworkInner {
     /// Returns true if the network has been shutdown.
     fn is_closed(&self) -> bool {
         self.connection_manager_handle.is_closed()
+    }
+
+    fn socket_send_buf_size(&self) -> usize {
+        self.socket_send_buf_size
+    }
+
+    fn socket_receive_buf_size(&self) -> usize {
+        self.socket_receive_buf_size
     }
 }
 

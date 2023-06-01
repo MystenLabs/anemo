@@ -154,34 +154,49 @@ impl Builder {
             }
             Err(result.unwrap_err())
         })()?;
-        let socket_send_buf_size =
-            if let Some(send_buffer_size) = quic_config.socket_send_buffer_size {
-                socket.set_send_buffer_size(send_buffer_size)?;
-                let buf_size = socket.send_buffer_size()?;
-                if buf_size < send_buffer_size {
-                    // Linux doubles requested size, so allow anything greater.
-                    let msg = format!(
-                    "failed to set socket send buffer size to {send_buffer_size}, got {buf_size}"
-                );
-                    if quic_config.allow_failed_socket_buffer_size_setting {
-                        warn!(msg);
-                    } else {
-                        return Err(anyhow!(msg));
-                    }
+        let socket_send_buf_size = if let Some(send_buffer_size) =
+            quic_config.socket_send_buffer_size
+        {
+            let result = socket.set_send_buffer_size(send_buffer_size);
+            if let Err(e) = result {
+                if quic_config.allow_failed_socket_buffer_size_setting {
+                    warn!("failed to set socket send buffer size to {send_buffer_size}: {e}",);
+                } else {
+                    return Err(e.into());
                 }
-                buf_size
-            } else {
-                socket.send_buffer_size()?
-            };
+            }
+            let buf_size = socket.send_buffer_size()?;
+            if buf_size < send_buffer_size {
+                // Linux doubles requested size, so allow anything greater.
+                let msg = format!(
+                    "expected socket send buffer size to be at least {send_buffer_size}, got {buf_size}"
+                );
+                if quic_config.allow_failed_socket_buffer_size_setting {
+                    warn!(msg);
+                } else {
+                    return Err(anyhow!(msg));
+                }
+            }
+            buf_size
+        } else {
+            socket.send_buffer_size()?
+        };
         let socket_receive_buf_size = if let Some(receive_buffer_size) =
             quic_config.socket_receive_buffer_size
         {
-            socket.set_recv_buffer_size(receive_buffer_size)?;
+            let result = socket.set_recv_buffer_size(receive_buffer_size);
+            if let Err(e) = result {
+                if quic_config.allow_failed_socket_buffer_size_setting {
+                    warn!("failed to set socket receive buffer size to {receive_buffer_size}: {e}",);
+                } else {
+                    return Err(e.into());
+                }
+            }
             let buf_size = socket.recv_buffer_size()?;
             if buf_size < receive_buffer_size {
                 // Linux doubles requested size, so allow anything greater.
                 let msg = format!(
-                    "failed to set socket receive buffer size to {receive_buffer_size}, got {buf_size}",
+                    "expected socket receive buffer size to be at least {receive_buffer_size}, got {buf_size}",
                 );
                 if quic_config.allow_failed_socket_buffer_size_setting {
                     warn!(msg);

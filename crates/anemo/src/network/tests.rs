@@ -10,8 +10,8 @@ async fn basic_network() -> Result<()> {
 
     let msg = b"The Way of Kings";
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
 
     let peer = network_1.connect(network_2.local_addr()).await?;
     let response = network_1
@@ -32,8 +32,8 @@ async fn basic_network() -> Result<()> {
 async fn connect() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
 
     let peer = network_1.connect(network_2.local_addr()).await?;
     assert_eq!(peer, network_2.peer_id());
@@ -45,8 +45,8 @@ async fn connect() -> Result<()> {
 async fn connect_with_peer_id() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
 
     let peer = network_1
         .connect_with_peer_id(network_2.local_addr(), network_2.peer_id())
@@ -60,9 +60,9 @@ async fn connect_with_peer_id() -> Result<()> {
 async fn connect_with_invalid_peer_id() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
-    let network_3 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
+    let network_3 = build_network().await?;
 
     // Try to dial network 2, but with network 3's peer id
     network_1
@@ -77,9 +77,9 @@ async fn connect_with_invalid_peer_id() -> Result<()> {
 async fn connect_with_invalid_peer_id_ensure_server_doesnt_succeed() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
-    let network_3 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
+    let network_3 = build_network().await?;
 
     let (mut subscriber_2, _) = network_2.subscribe().unwrap();
 
@@ -123,9 +123,9 @@ async fn connect_with_invalid_peer_id_ensure_server_doesnt_succeed() -> Result<(
 async fn connect_with_hostname() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
-    let network_3 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
+    let network_3 = build_network().await?;
 
     let peer = network_1
         .connect_with_peer_id(
@@ -161,7 +161,7 @@ async fn max_concurrent_connections_0() -> Result<()> {
         .config(config)
         .start(echo_service())?;
 
-    let network_2 = build_network()?;
+    let network_2 = build_network().await?;
 
     network_2
         .connect_with_peer_id(network_1.local_addr(), network_1.peer_id())
@@ -186,8 +186,8 @@ async fn max_concurrent_connections_1() -> Result<()> {
         .config(config)
         .start(echo_service())?;
 
-    let network_2 = build_network()?;
-    let network_3 = build_network()?;
+    let network_2 = build_network().await?;
+    let network_3 = build_network().await?;
 
     // first connection succeeds
     network_2
@@ -214,8 +214,8 @@ async fn max_concurrent_connections_1() -> Result<()> {
 async fn reject_peer_with_affinity_never() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
 
     // Configure peer 2 with affinity never
     let peer_info_2 = crate::types::PeerInfo {
@@ -238,9 +238,9 @@ async fn reject_peer_with_affinity_never() -> Result<()> {
 async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
-    let network_3 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
+    let network_3 = build_network().await?;
 
     let mut subscriber_1 = network_1.subscribe()?.0;
 
@@ -279,11 +279,11 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
     Ok(())
 }
 
-fn build_network() -> Result<Network> {
-    build_network_with_addr("localhost:0")
+async fn build_network() -> Result<Network> {
+    build_network_with_addr("localhost:0").await
 }
 
-fn build_network_with_addr(addr: &str) -> Result<Network> {
+async fn build_network_with_addr(addr: &str) -> Result<Network> {
     let network = Network::bind(addr)
         .random_private_key()
         .server_name("test")
@@ -294,6 +294,8 @@ fn build_network_with_addr(addr: &str) -> Result<Network> {
         peer_id =% network.peer_id(),
         "starting network"
     );
+    // Give time for spawned I/O tasks to spin up.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     Ok(network)
 }
@@ -312,8 +314,8 @@ fn echo_service() -> BoxCloneService<Request<Bytes>, Response<Bytes>, Infallible
 async fn ip6_calling_ip4() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network_with_addr("[::]:0")?;
-    let network_2 = build_network_with_addr("127.0.0.1:0")?;
+    let network_1 = build_network_with_addr("[::]:0").await?;
+    let network_2 = build_network_with_addr("127.0.0.1:0").await?;
 
     let msg = b"The Way of Kings";
     let peer = network_1.connect(network_2.local_addr()).await?;
@@ -330,8 +332,8 @@ async fn ip6_calling_ip4() -> Result<()> {
 async fn localhost_calling_anyaddr() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network_with_addr("0.0.0.0:0")?;
-    let network_2 = build_network_with_addr("127.0.0.1:0")?;
+    let network_1 = build_network_with_addr("0.0.0.0:0").await?;
+    let network_2 = build_network_with_addr("127.0.0.1:0").await?;
 
     let msg = b"The Way of Kings";
     let peer = network_2
@@ -357,8 +359,8 @@ async fn localhost_calling_anyaddr() -> Result<()> {
 async fn dropped_connection() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
 
     let msg = b"The Way of Kings";
     let peer = network_1.connect(network_2.local_addr()).await?;
@@ -385,8 +387,8 @@ async fn basic_connectivity_check() -> Result<()> {
 
     let _guard = crate::init_tracing_for_testing();
 
-    let network_1 = build_network()?;
-    let network_2 = build_network()?;
+    let network_1 = build_network().await?;
+    let network_2 = build_network().await?;
 
     let peer_id_1 = network_1.peer_id();
     let peer_id_2 = network_2.peer_id();
@@ -497,7 +499,7 @@ async fn drop_shutdown() -> Result<()> {
         .server_name("test")
         .start(service)?;
 
-    let network_2 = build_network()?;
+    let network_2 = build_network().await?;
 
     let peer = network_2.connect(network.local_addr()).await?;
     let _response = network_2.rpc(peer, Request::new(Bytes::new())).await?;
@@ -554,7 +556,7 @@ async fn explicit_shutdown() -> Result<()> {
         .server_name("test")
         .start(service)?;
 
-    let network_2 = build_network()?;
+    let network_2 = build_network().await?;
 
     let peer = network_2.connect(network.local_addr()).await?;
     let _response = network_2.rpc(peer, Request::new(Bytes::new())).await?;
@@ -588,7 +590,7 @@ async fn explicit_shutdown() -> Result<()> {
 #[tokio::test]
 async fn subscribe_channel_closes_on_shutdown() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
-    let network = build_network()?;
+    let network = build_network().await?;
     let mut subscriber = network.subscribe()?.0;
 
     drop(network);
@@ -604,7 +606,7 @@ async fn subscribe_channel_closes_on_shutdown() -> Result<()> {
 #[tokio::test]
 async fn subscribe_channel_closes_on_explicit_shutdown() -> Result<()> {
     let _guard = crate::init_tracing_for_testing();
-    let network = build_network()?;
+    let network = build_network().await?;
     let mut subscriber = network.subscribe()?.0;
 
     network.shutdown().await?;
@@ -656,7 +658,7 @@ async fn early_termination_of_request_handlers() {
         .start(service)
         .unwrap();
 
-    let network_2 = build_network().unwrap();
+    let network_2 = build_network().await.unwrap();
 
     let peer = network_2.connect(network.local_addr()).await.unwrap();
 
@@ -753,6 +755,8 @@ async fn user_provided_client_service_layer() {
 
     let (network_1, server_counter_1, client_counter_1) = create_network();
     let (network_2, server_counter_2, client_counter_2) = create_network();
+    // Give time for spawned I/O tasks to spin up.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let peer_id = network_1.connect(network_2.local_addr()).await.unwrap();
 
@@ -798,7 +802,7 @@ async fn network_ref_via_extension() -> Result<()> {
         .server_name("test")
         .random_private_key()
         .start(svc)?;
-    let network_2 = build_network()?;
+    let network_2 = build_network().await?;
 
     let peer = network_2.connect(network_1.local_addr()).await?;
     let mut response = network_2

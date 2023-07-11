@@ -1,0 +1,17 @@
+[package]
+name = "anemo-tls"
+version = "0.0.0"
+license = "Apache-2.0 OR MIT"
+authors = [ "Andrew Schran <aschran@mystenlabs.com>" ]
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.56"
+futures = "0.3.21"
+futures-util = "0.3.21"
+rustls = { version = "0.21.2", features = ["dangerous_configuration"] }
+tokio = { version = "1.17.0", features = ["sync", "rt", "macros", "io-util"] }
+tokio-rustls = { version = "0.24", features = ["dangerous_configuration"] }
+tokio-util = { version = "0.7.4", features = ["compat"] }
+tracing = "0.1.32"
+yamux = { git = "https://github.com/aschran/rust-yamux.git", rev = "ed1bd31a75305ca7f13bdc0ccd309905fa2a42c0" }

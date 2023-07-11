@@ -7,7 +7,8 @@ pub use address::Address;
 pub use peer_id::{ConnectionOrigin, Direction, PeerId};
 
 pub use http::Extensions;
-use quinn::ConnectionError;
+
+use crate::connection::ConnectionError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
@@ -79,15 +80,18 @@ pub enum DisconnectReason {
 }
 
 impl DisconnectReason {
-    pub fn from_quinn_error(error: &ConnectionError) -> Self {
+    pub fn from_connection_error(error: &ConnectionError) -> Self {
         match error {
-            ConnectionError::VersionMismatch => DisconnectReason::VersionMismatch,
-            ConnectionError::TransportError(_) => DisconnectReason::TransportError,
-            ConnectionError::ConnectionClosed(_) => DisconnectReason::ConnectionClosed,
-            ConnectionError::ApplicationClosed(_) => DisconnectReason::ApplicationClosed,
-            ConnectionError::Reset => DisconnectReason::Reset,
-            ConnectionError::TimedOut => DisconnectReason::TimedOut,
-            ConnectionError::LocallyClosed => DisconnectReason::LocallyClosed,
+            ConnectionError::Quic(error) => match error {
+                quinn::ConnectionError::VersionMismatch => DisconnectReason::VersionMismatch,
+                quinn::ConnectionError::TransportError(_) => DisconnectReason::TransportError,
+                quinn::ConnectionError::ConnectionClosed(_) => DisconnectReason::ConnectionClosed,
+                quinn::ConnectionError::ApplicationClosed(_) => DisconnectReason::ApplicationClosed,
+                quinn::ConnectionError::Reset => DisconnectReason::Reset,
+                quinn::ConnectionError::TimedOut => DisconnectReason::TimedOut,
+                quinn::ConnectionError::LocallyClosed => DisconnectReason::LocallyClosed,
+            },
+            ConnectionError::Tls(_) => DisconnectReason::ConnectionClosed,
         }
     }
 }

@@ -2,7 +2,7 @@ use super::request_handler::InboundRequestHandler;
 use crate::{
     config::Config,
     connection::Connection,
-    endpoint::{Connecting, Endpoint},
+    endpoint::Endpoint,
     types::{Address, DisconnectReason, PeerAffinity, PeerEvent, PeerInfo},
     ConnectionOrigin, PeerId, Request, Response, Result,
 };
@@ -17,7 +17,7 @@ use tokio::{
     task::JoinSet,
 };
 use tower::util::BoxCloneService;
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, warn};
 
 #[derive(Debug)]
 pub enum ConnectionManagerRequest {
@@ -188,14 +188,9 @@ impl ConnectionManager {
         self.endpoint
             .wait_idle(self.config.shutdown_idle_timeout())
             .await;
-
-        // This is a small hack in order to ensure that the underlying socket we're bound to is
-        // dropped and immediately available to be rebound to once this function exits.
-        // In essence we construct a new UdpSocket, bound on some ephemeral localhost port, and
-        // swap it in for the socket the endpoint is currently bound to, causing it to be dropped
-        // and freed.
-        let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        self.endpoint.rebind(socket).unwrap();
+        if let Err(e) = self.endpoint.drop_socket() {
+            warn!("unable to drop socket: {e}");
+        }
     }
 
     /// This method adds an established connection with a peer to the map of active peers.
@@ -227,11 +222,11 @@ impl ConnectionManager {
         self.dial_peer(address, peer_id, oneshot);
     }
 
-    fn handle_incoming(&mut self, connecting: Connecting) {
+    fn handle_incoming(&mut self, connection: Result<Connection>) {
         trace!("received new incoming connection");
 
         self.pending_connections.spawn(Self::handle_incoming_task(
-            connecting,
+            connection,
             self.config.clone(),
             self.active_peers.clone(),
             self.known_peers.clone(),
@@ -239,13 +234,13 @@ impl ConnectionManager {
     }
 
     async fn handle_incoming_task(
-        connecting: Connecting,
+        connection: Result<Connection>,
         config: Arc<Config>,
         active_peers: ActivePeers,
         known_peers: KnownPeers,
     ) -> ConnectingOutput {
         let fut = async {
-            let connection = connecting.await?;
+            let connection = connection?;
 
             // TODO close the connection explicitly with a reason once we have machine
             // readable errors. See https://github.com/MystenLabs/anemo/issues/13 for more info.
@@ -421,33 +416,31 @@ impl ConnectionManager {
         peer_id: Option<PeerId>,
         oneshot: oneshot::Sender<Result<PeerId>>,
     ) {
-        let target_address = address.clone();
-        let maybe_connecting = if let Some(peer_id) = peer_id {
-            self.endpoint
-                .connect_with_expected_peer_id(address, peer_id)
-        } else {
-            self.endpoint.connect(address)
-        };
         self.pending_connections.spawn(Self::dial_peer_task(
-            maybe_connecting,
-            target_address,
+            self.endpoint.clone(),
+            address,
             peer_id,
             oneshot,
             self.config.clone(),
         ));
     }
 
-    // TODO maybe look at cloning the endpoint so that we can try multiple addresses in the event
-    // Address resolves to multiple ips.
+    // TODO maybe try multiple addresses in the event Address resolves to multiple ips.
     async fn dial_peer_task(
-        maybe_connecting: Result<Connecting>,
+        endpoint: Arc<Endpoint>,
         target_address: Address,
         peer_id: Option<PeerId>,
         oneshot: oneshot::Sender<Result<PeerId>>,
         config: Arc<Config>,
     ) -> ConnectingOutput {
         let fut = async {
-            let connection = maybe_connecting?.await?;
+            let connection = if let Some(peer_id) = peer_id {
+                endpoint
+                    .connect_with_expected_peer_id(target_address.clone(), peer_id)
+                    .await
+            } else {
+                endpoint.connect(target_address.clone()).await
+            }?;
 
             super::wire::handshake(connection).await
         };
@@ -788,11 +781,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown() {
+    async fn shutdown_quic() {
         let socket = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = socket.local_addr().unwrap();
-        let config = crate::config::EndpointConfig::random("test");
-        let endpoint = Arc::new(Endpoint::new(config, socket).unwrap());
+        let config = crate::config::EndpointConfig::random_quic("test");
+        let endpoint = Arc::new(Endpoint::new_quic(config, socket).unwrap());
         let (connection_manager, sender) = ConnectionManager::new(
             Default::default(),
             endpoint,

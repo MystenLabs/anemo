@@ -1,5 +1,5 @@
 use crate::{
-    config::EndpointConfig,
+    config::{EndpointConfig, TransportConfig},
     endpoint::Endpoint,
     middleware::{add_extension::AddExtensionLayer, timeout},
     types::{Address, DisconnectReason, PeerEvent},
@@ -127,13 +127,13 @@ impl Builder {
         <T as Service<Request<Bytes>>>::Future: Send + 'static,
     {
         let config = self.config.unwrap_or_default();
-        let quic_config = config.quic.clone().unwrap_or_default();
+        let transport_config = config.transport.clone().unwrap_or_default();
         let primary_server_name = self.server_name.unwrap();
         let alternate_server_name = self.alternate_server_name;
         let private_key = self.private_key.unwrap();
 
         let endpoint_config = EndpointConfig::builder()
-            .transport_config(config.transport_config())
+            .transport_config(&transport_config)
             .server_name(primary_server_name)
             .alternate_server_name(alternate_server_name)
             .private_key(private_key)
@@ -143,8 +143,14 @@ impl Builder {
         let socket = (|| {
             let mut result = Err(anyhow!("no addresses to bind to"));
             for addr in addrs.iter() {
-                let socket =
-                    Socket::new(Domain::for_address(*addr), Type::DGRAM, Some(Protocol::UDP))?;
+                let socket = match transport_config {
+                    TransportConfig::Quic(_) => {
+                        Socket::new(Domain::for_address(*addr), Type::DGRAM, Some(Protocol::UDP))?
+                    }
+                    TransportConfig::Tls(_) => {
+                        Socket::new(Domain::for_address(*addr), Type::STREAM, None)?
+                    }
+                };
                 result = socket
                     .bind(&socket2::SockAddr::from(*addr))
                     .map_err(|e| e.into());
@@ -155,11 +161,11 @@ impl Builder {
             Err(result.unwrap_err())
         })()?;
         let socket_send_buf_size = if let Some(send_buffer_size) =
-            quic_config.socket_send_buffer_size
+            transport_config.socket_send_buffer_size()
         {
             let result = socket.set_send_buffer_size(send_buffer_size);
             if let Err(e) = result {
-                if quic_config.allow_failed_socket_buffer_size_setting {
+                if transport_config.allow_failed_socket_buffer_size_setting() {
                     warn!("failed to set socket send buffer size to {send_buffer_size}: {e}",);
                 } else {
                     return Err(e.into());
@@ -171,7 +177,7 @@ impl Builder {
                 let msg = format!(
                     "expected socket send buffer size to be at least {send_buffer_size}, got {buf_size}"
                 );
-                if quic_config.allow_failed_socket_buffer_size_setting {
+                if transport_config.allow_failed_socket_buffer_size_setting() {
                     warn!(msg);
                 } else {
                     return Err(anyhow!(msg));
@@ -182,11 +188,11 @@ impl Builder {
             socket.send_buffer_size()?
         };
         let socket_receive_buf_size = if let Some(receive_buffer_size) =
-            quic_config.socket_receive_buffer_size
+            transport_config.socket_receive_buffer_size()
         {
             let result = socket.set_recv_buffer_size(receive_buffer_size);
             if let Err(e) = result {
-                if quic_config.allow_failed_socket_buffer_size_setting {
+                if transport_config.allow_failed_socket_buffer_size_setting() {
                     warn!("failed to set socket receive buffer size to {receive_buffer_size}: {e}",);
                 } else {
                     return Err(e.into());
@@ -198,7 +204,7 @@ impl Builder {
                 let msg = format!(
                     "expected socket receive buffer size to be at least {receive_buffer_size}, got {buf_size}",
                 );
-                if quic_config.allow_failed_socket_buffer_size_setting {
+                if transport_config.allow_failed_socket_buffer_size_setting() {
                     warn!(msg);
                 } else {
                     return Err(anyhow!(msg));
@@ -209,8 +215,18 @@ impl Builder {
             socket.recv_buffer_size()?
         };
 
-        let endpoint = Endpoint::new(endpoint_config, socket.into())?;
-
+        let endpoint = match transport_config {
+            TransportConfig::Quic(_) => Endpoint::new_quic(endpoint_config, socket.into())?,
+            TransportConfig::Tls(_tls) => {
+                socket.listen(128)?;
+                let tcp_listener: std::net::TcpListener = socket.into();
+                tcp_listener.set_nonblocking(true)?;
+                Endpoint::new_tls(
+                    endpoint_config,
+                    tokio::net::TcpListener::from_std(tcp_listener)?,
+                )?
+            }
+        };
         let config = Arc::new(config);
         let endpoint = Arc::new(endpoint);
         let active_peers = ActivePeers::new(config.peer_event_broadcast_channel_capacity());

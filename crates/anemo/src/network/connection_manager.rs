@@ -250,7 +250,9 @@ impl ConnectionManager {
             // TODO close the connection explicitly with a reason once we have machine
             // readable errors. See https://github.com/MystenLabs/anemo/issues/13 for more info.
             match known_peers.get(&connection.peer_id()) {
-                Some(PeerInfo { affinity, .. }) if matches!(affinity, PeerAffinity::High) => {
+                Some(PeerInfo { affinity, .. })
+                    if matches!(affinity, PeerAffinity::High | PeerAffinity::Allowed) =>
+                {
                     // Do nothing, let the connection through
                 }
                 Some(PeerInfo { affinity, .. }) if matches!(affinity, PeerAffinity::Never) => {
@@ -374,7 +376,7 @@ impl ConnectionManager {
             known_peers
                 .values()
                 .filter(|peer_info| {
-                    !matches!(peer_info.affinity, PeerAffinity::Never)
+                    matches!(peer_info.affinity, PeerAffinity::High)
                     && peer_info.peer_id != self.endpoint.peer_id() // We don't dial ourself
                     && !peer_info.address.is_empty() // The peer has an address we can dial
                     && !active_peers.contains(&peer_info.peer_id) // The node is not already connected.

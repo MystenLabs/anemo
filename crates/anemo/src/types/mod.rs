@@ -47,8 +47,9 @@ pub mod header {
 pub enum PeerAffinity {
     /// Always attempt to maintain a connection with this Peer.
     High,
+    /// Not proactively attempt to estlish a connection but always accept inbound connection requests.
+    Allowed,
     /// Never attempt to maintain a connection with this Peer.
-    ///
     /// Inbound connection requests from these Peers are rejected.
     Never,
 }

@@ -60,18 +60,19 @@ pub struct Config {
     /// Maximum number of concurrent connections to have established at a given point in time.
     ///
     /// This limit is applied in the following ways:
-    ///  - Inbound connections from [`KnownPeers`] with [`PeerAffinity::High`] bypass this limit. All
-    ///  other inbound connections are only accepted if the total number of inbound and outbound
+    ///  - Inbound connections from [`KnownPeers`] with [`PeerAffinity::High`] or
+    /// [`PeerAffinity::Allowed`] bypass this limit. All other inbound
+    ///  connections are only accepted if the total number of inbound and outbound
     ///  connections, irrespective of affinity, is less than this limit.
     ///  - Outbound connections explicitly made by the application via [`Network::connect`] or
     ///  [`Network::connect_with_peer_id`] bypass this limit.
     ///  - Outbound connections made in the background, due to configured [`KnownPeers`], to peers with
-    ///  [`PeerAffinity::High`] bypass this limit and are always attempted, while peers with lower
-    ///  affinity respect this limit.
+    ///  [`PeerAffinity::High`] bypass this limit and are always attempted.
     ///
     /// If unspecified, there will be no limit on the number of concurrent connections.
     ///
     /// [`KnownPeers`]: crate::KnownPeers
+    /// [`PeerAffinity::Allowed`]: crate::types::PeerAffinity::Allowed
     /// [`PeerAffinity::High`]: crate::types::PeerAffinity::High
     /// [`Network::connect`]: crate::Network::connect
     /// [`Network::connect_with_peer_id`]: crate::Network::connect_with_peer_id
@@ -501,6 +502,7 @@ impl EndpointConfigBuilder {
         Ok(server)
     }
 
+    #[allow(deprecated)]
     fn client_config(
         cert: rustls::Certificate,
         pkcs8_der: rustls::PrivateKey,
@@ -561,6 +563,7 @@ impl EndpointConfig {
         &self.quinn_client_config
     }
 
+    #[allow(deprecated)]
     pub fn client_config_with_expected_server_identity(
         &self,
         peer_id: PeerId,

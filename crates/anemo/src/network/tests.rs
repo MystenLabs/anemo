@@ -1,6 +1,7 @@
 use crate::{types::PeerEvent, Network, NetworkRef, Request, Response, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use std::convert::Infallible;
+use futures::FutureExt;
+use std::{convert::Infallible, time::Duration};
 use tower::{util::BoxCloneService, ServiceExt};
 use tracing::trace;
 
@@ -241,6 +242,7 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
     let network_1 = build_network()?;
     let network_2 = build_network()?;
     let network_3 = build_network()?;
+    let network_4 = build_network()?;
 
     let mut subscriber_1 = network_1.subscribe()?.0;
 
@@ -258,6 +260,13 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
         address: vec![network_3.local_addr().into()],
     };
     network_1.known_peers().insert(peer_info_3);
+    // Configure peer 4 with Allowed affinity
+    let peer_info_4 = crate::types::PeerInfo {
+        peer_id: network_4.peer_id(),
+        affinity: crate::types::PeerAffinity::Allowed,
+        address: vec![network_4.local_addr().into()],
+    };
+    network_1.known_peers().insert(peer_info_4);
 
     // When peer 2 tries to connect peer 1 will reject it
     network_2
@@ -265,7 +274,7 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
         .await
         .unwrap_err();
 
-    // We only ever see connections being made/lost with peer 3 and not peer 2
+    // We only ever see connections being made/lost with peer 3 and not peer 2 or 4
     let peer_id_3 = network_3.peer_id();
     assert_eq!(PeerEvent::NewPeer(peer_id_3), subscriber_1.recv().await?);
 
@@ -415,6 +424,55 @@ async fn basic_connectivity_check() -> Result<()> {
         LostPeer(peer_id_1, DisconnectReason::ApplicationClosed),
         subscriber_2.recv().await?
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn basic_connectivity_check_with_allowlist_affinity() -> Result<()> {
+    use crate::types::PeerEvent::*;
+
+    let _guard = crate::init_tracing_for_testing();
+
+    let network_1 = build_network()?;
+    let network_2 = build_network()?;
+
+    let peer_id_1 = network_1.peer_id();
+    let peer_id_2 = network_2.peer_id();
+
+    let mut subscriber_1 = network_1.subscribe()?.0;
+    let mut subscriber_2 = network_2.subscribe()?.0;
+
+    network_1.known_peers().insert(crate::types::PeerInfo {
+        peer_id: peer_id_2,
+        affinity: crate::types::PeerAffinity::Allowed,
+        address: vec![network_2.local_addr().into()],
+    });
+
+    network_2.known_peers().insert(crate::types::PeerInfo {
+        peer_id: peer_id_1,
+        affinity: crate::types::PeerAffinity::Allowed,
+        address: vec![network_1.local_addr().into()],
+    });
+    // Peers shouldn't connect each other.
+    let mut timeout = tokio::time::sleep(Duration::from_secs(5)).boxed();
+    tokio::select! {
+        _ = subscriber_1.recv() => return Err(anyhow::anyhow!("peer 1 should not have received a peer event")),
+        _ = subscriber_2.recv() => return Err(anyhow::anyhow!("peer 2 should not have received a peer event")),
+        _ = &mut timeout => (),
+    };
+
+    // Now remove peer2 from network1 and add it back as High affinity.
+    network_1.known_peers().remove(&peer_id_2).unwrap();
+    network_1.known_peers().insert(crate::types::PeerInfo {
+        peer_id: peer_id_2,
+        affinity: crate::types::PeerAffinity::High,
+        address: vec![network_2.local_addr().into()],
+    });
+
+    // Expect both to have new peer events.
+    assert_eq!(NewPeer(peer_id_2), subscriber_1.recv().await?);
+    assert_eq!(NewPeer(peer_id_1), subscriber_2.recv().await?);
 
     Ok(())
 }

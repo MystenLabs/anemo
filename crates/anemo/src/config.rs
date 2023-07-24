@@ -563,6 +563,10 @@ impl EndpointConfig {
         &self.quinn_client_config
     }
 
+    // TODO: remove #[allow(deprecated)] once we upgrade rustls
+    // to 0.21.4 or above, where `with_single_cert` is marked as
+    // deprecated. Before that happens, we use the attribute to
+    // keep clippy happy.
     #[allow(deprecated)]
     pub fn client_config_with_expected_server_identity(
         &self,

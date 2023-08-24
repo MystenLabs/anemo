@@ -44,26 +44,33 @@ impl rustls::server::ClientCertVerifier for CertVerifier {
 
         // Step 2: call verification from webpki
         let cert = cert
-            .verify_is_valid_tls_client_cert(
+            .verify_for_usage(
                 SUPPORTED_SIG_ALGS,
-                &webpki::TlsClientTrustAnchors(&trustroots),
+                &trustroots,
                 &chain,
                 now,
+                webpki::KeyUsage::client_auth(),
+                &[],
             )
             .map_err(pki_error)
             .map(|_| cert)?;
 
         // Ensure the cert is valid for the network name
-        let dns_name_refs = self
+        let subject_name_refs = self
             .server_names
             .iter()
-            .map(|name| webpki::DnsNameRef::try_from_ascii_str(name.as_str()))
+            .map(|name| webpki::SubjectNameRef::try_from_ascii_str(name.as_str()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| rustls::Error::UnsupportedNameType)?;
 
-        cert.verify_is_valid_for_at_least_one_dns_name(dns_name_refs.into_iter())
-            .map_err(pki_error)
-            .map(|_| rustls::server::ClientCertVerified::assertion())
+        if subject_name_refs
+            .into_iter()
+            .any(|name| cert.verify_is_valid_for_subject_name(name).is_ok())
+        {
+            Ok(rustls::server::ClientCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General("no valid subject name".into()))
+        }
     }
 }
 
@@ -84,12 +91,11 @@ impl rustls::client::ServerCertVerifier for CertVerifier {
         // Then we check this is actually a valid self-signed certificate with matching name
         // Step 1: prepare arguments
         let (cert, chain, trustroots) = prepare_for_self_signed(end_entity, intermediates)?;
-        let webpki_now =
-            webpki::Time::try_from(now).map_err(|_| rustls::Error::FailedToGetCurrentTime)?;
+        let now = webpki::Time::try_from(now).map_err(|_| rustls::Error::FailedToGetCurrentTime)?;
 
         let dns_nameref = match server_name {
             rustls::ServerName::DnsName(dns_name) => {
-                webpki::DnsNameRef::try_from_ascii_str(dns_name.as_ref())
+                webpki::SubjectNameRef::try_from_ascii_str(dns_name.as_ref())
                     .map_err(|_| rustls::Error::UnsupportedNameType)?
             }
             _ => return Err(rustls::Error::UnsupportedNameType),
@@ -98,7 +104,7 @@ impl rustls::client::ServerCertVerifier for CertVerifier {
         self.server_names
             .iter()
             .find(
-                |name| match webpki::DnsNameRef::try_from_ascii_str(name.as_ref()) {
+                |name| match webpki::SubjectNameRef::try_from_ascii_str(name.as_ref()) {
                     Ok(dns_name_ref) => dns_name_ref.as_ref() == dns_nameref.as_ref(),
                     Err(_) => {
                         tracing::error!("invalid dns name: {:?}", name);
@@ -110,16 +116,18 @@ impl rustls::client::ServerCertVerifier for CertVerifier {
 
         // Step 2: call verification from webpki
         let cert = cert
-            .verify_is_valid_tls_server_cert(
+            .verify_for_usage(
                 SUPPORTED_SIG_ALGS,
-                &webpki::TlsServerTrustAnchors(&trustroots),
+                &trustroots,
                 &chain,
-                webpki_now,
+                now,
+                webpki::KeyUsage::server_auth(),
+                &[],
             )
             .map_err(pki_error)
             .map(|_| cert)?;
 
-        cert.verify_is_valid_for_dns_name(dns_nameref)
+        cert.verify_is_valid_for_subject_name(dns_nameref)
             .map_err(pki_error)
             .map(|_| rustls::client::ServerCertVerified::assertion())
     }

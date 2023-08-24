@@ -29,7 +29,7 @@ tokio = { version = "1.17.0", features = ["sync", "rt", "macros", "io-util"] }
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tower = { version = "0.4.12", default-features = false, features = ["full"] }
 tracing = "0.1.32"
-webpki = { version = "0.22.0", features = ["alloc", "std"] }
+webpki = { version = "0.101.0", package = "rustls-webpki", features = ["alloc", "std"] }
 x509-parser = "0.14.0"
 hex = "0.4.3"
 tap = "1.0.1"

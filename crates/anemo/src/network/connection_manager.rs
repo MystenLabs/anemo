@@ -250,11 +250,16 @@ impl ConnectionManager {
             // TODO close the connection explicitly with a reason once we have machine
             // readable errors. See https://github.com/MystenLabs/anemo/issues/13 for more info.
             match known_peers.get(&connection.peer_id()) {
-                Some(PeerInfo { affinity: PeerAffinity::High | PeerAffinity::Allowed, .. }) =>
-                {
+                Some(PeerInfo {
+                    affinity: PeerAffinity::High | PeerAffinity::Allowed,
+                    ..
+                }) => {
                     // Do nothing, let the connection through
                 }
-                Some(PeerInfo { affinity: PeerAffinity::Never, .. }) => {
+                Some(PeerInfo {
+                    affinity: PeerAffinity::Never,
+                    ..
+                }) => {
                     return Err(anyhow::anyhow!(
                         "rejecting connection from peer {} due to having PeerAffinity::Never",
                         connection.peer_id()

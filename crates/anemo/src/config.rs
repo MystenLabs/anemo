@@ -342,20 +342,24 @@ impl QuicConfig {
             config.keep_alive_interval(Some(keep_alive_interval));
         }
 
-        let mut cc_config = congestion::NewRenoConfig::default();
-        cc_config.loss_reduction_factor(0.7);
-        cc_config.initial_window(4 << 20);
-        // todo: find replacement, minimum window no longer supported
-        // cc_config.minimum_window(1 << 20);
+        // let mut cc_config = congestion::NewRenoConfig::default();
+        // cc_config.loss_reduction_factor(0.7);
+        // cc_config.initial_window(4 << 20);
+        // // todo: find replacement, minimum window no longer supported
+        // // cc_config.minimum_window(1 << 20);
 
-        let mut mtu_discovery = MtuDiscoveryConfig::default();
-        mtu_discovery.upper_bound(1500);
-        config.mtu_discovery_config(Some(mtu_discovery));
+        // let mut mtu_discovery = MtuDiscoveryConfig::default();
+        // mtu_discovery.upper_bound(1500);
+        // config.mtu_discovery_config(Some(mtu_discovery));
 
-        config
-            .congestion_controller_factory(Arc::new(cc_config))
-            .initial_mtu(1500)
-            .min_mtu(1500);
+        // config
+        //     .congestion_controller_factory(Arc::new(cc_config))
+        //     .initial_mtu(1500)
+        //     .min_mtu(1500);
+
+        let bbr_config = congestion::BbrConfig::default();
+        // bbr_config.initial_window(4 << 20);
+        config.congestion_controller_factory(Arc::new(bbr_config));
 
         config
     }

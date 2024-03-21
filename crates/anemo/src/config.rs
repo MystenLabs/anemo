@@ -3,7 +3,7 @@ use crate::{
     PeerId, Result,
 };
 use pkcs8::EncodePrivateKey;
-use quinn::{congestion, VarInt};
+use quinn::{congestion, MtuDiscoveryConfig, VarInt};
 use rcgen::{CertificateParams, KeyPair, SignatureAlgorithm};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
@@ -347,7 +347,15 @@ impl QuicConfig {
         cc_config.initial_window(4 << 20);
         // todo: find replacement, minimum window no longer supported
         // cc_config.minimum_window(1 << 20);
-        config.congestion_controller_factory(Arc::new(cc_config));
+
+        let mut mtu_discovery = MtuDiscoveryConfig::default();
+        mtu_discovery.upper_bound(1500);
+        config.mtu_discovery_config(Some(mtu_discovery));
+
+        config
+            .congestion_controller_factory(Arc::new(cc_config))
+            .initial_mtu(1500)
+            .min_mtu(1500);
 
         config
     }

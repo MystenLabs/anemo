@@ -345,7 +345,8 @@ impl QuicConfig {
         let mut cc_config = congestion::NewRenoConfig::default();
         cc_config.loss_reduction_factor(0.7);
         cc_config.initial_window(4 << 20);
-        cc_config.minimum_window(1 << 20);
+        // todo: find replacement, minimum window no longer supported
+        // cc_config.minimum_window(1 << 20);
         config.congestion_controller_factory(Arc::new(cc_config));
 
         config

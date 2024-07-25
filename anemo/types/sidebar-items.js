@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Address","Direction","DisconnectReason","PeerAffinity","PeerEvent","Version"],"mod":["header","request","response"],"struct":["ConnectionOrigin","Extensions","PeerId","PeerInfo"],"type":["HeaderMap"]};

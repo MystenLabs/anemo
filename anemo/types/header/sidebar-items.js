@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CONTENT_TYPE","STATUS_MESSAGE","TIMEOUT"]};

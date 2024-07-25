@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["add_extension","box_clone_layer"]};

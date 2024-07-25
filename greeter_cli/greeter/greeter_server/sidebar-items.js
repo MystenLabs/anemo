@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["GreeterServer","SayHelloSvc"],"trait":["Greeter"],"type":["InboundRequestLayer"]};

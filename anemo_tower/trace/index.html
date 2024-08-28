@@ -1,0 +1,157 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Middleware that adds high level tracing to a `Service`."><title>anemo_tower::trace - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-dd39b87e5fcfba68.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="anemo_tower" data-themes="" data-resource-suffix="" data-rustdoc-version="1.80.1 (3f5fd8dd4 2024-08-06)" data-channel="1.80.1" data-search-js="search-d52510db62a78183.js" data-settings-js="settings-4313503d2e1961c2.js" ><script src="../../static.files/storage-118b08c4c78b968e.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-20a3ad099b048cf2.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-df360f571f6edeae.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../anemo_tower/index.html">anemo_tower</a><span class="version">0.0.0</span></h2></div><h2 class="location"><a href="#">Module trace</a></h2><div class="sidebar-elems"><section><ul class="block"><li><a href="#structs">Structs</a></li><li><a href="#traits">Traits</a></li></ul></section><h2><a href="../index.html">In crate anemo_tower</a></h2></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Module <a href="../index.html">anemo_tower</a>::<wbr><a class="mod" href="#">trace</a><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><span class="out-of-band"><a class="src" href="../../src/anemo_tower/trace/mod.rs.html#1-343">source</a> · <button id="toggle-all-docs" title="collapse all docs">[<span>&#x2212;</span>]</button></span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Middleware that adds high level <a href="https://crates.io/crates/tracing">tracing</a> to a <a href="tower::Service"><code>Service</code></a>.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<p>Adding tracing to your service can be as simple as:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>anemo::{Request, Response};
+<span class="kw">use </span>bytes::Bytes;
+<span class="kw">use </span>tower::{ServiceBuilder, ServiceExt, Service};
+<span class="kw">use </span>anemo_tower::trace::TraceLayer;
+<span class="kw">use </span>std::convert::Infallible;
+
+<span class="kw">async fn </span>handle(request: Request&lt;Bytes&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Response&lt;Bytes&gt;, Infallible&gt; {
+    <span class="prelude-val">Ok</span>(Response::new(Bytes::from(<span class="string">"foo"</span>)))
+}
+
+<span class="comment">// Setup tracing
+</span>tracing_subscriber::fmt::init();
+
+<span class="kw">let </span><span class="kw-2">mut </span>service = ServiceBuilder::new()
+    .layer(TraceLayer::new_for_server_errors())
+    .service_fn(handle);
+
+<span class="kw">let </span>request = Request::new(Bytes::from(<span class="string">"foo"</span>));
+
+<span class="kw">let </span>response = service
+    .ready()
+    .<span class="kw">await</span><span class="question-mark">?
+    </span>.call(request)
+    .<span class="kw">await</span><span class="question-mark">?</span>;</code></pre></div>
+<p>If you run this application with <code>RUST_LOG=anemo_tower=trace cargo run</code> you should see logs like:</p>
+<div class="example-wrap"><pre class="language-text"><code>2022-09-28T17:47:57.262533Z DEBUG request{route=/ version=V1}: anemo_tower::trace::on_request: started processing request
+2022-09-28T17:47:57.262562Z DEBUG request{route=/ version=V1}: anemo_tower::trace::on_response: finished processing request latency=0 ms status=200
+</code></pre></div><h2 id="customization"><a class="doc-anchor" href="#customization">§</a>Customization</h2>
+<p><a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a> comes with good defaults but also supports customizing many aspects of the output.</p>
+<p>The default behaviour supports some customization:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>anemo::{Request, Response};
+<span class="kw">use </span>bytes::Bytes;
+<span class="kw">use </span>tower::ServiceBuilder;
+<span class="kw">use </span>tracing::Level;
+<span class="kw">use </span>anemo_tower::{
+    LatencyUnit,
+    trace::{TraceLayer, DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse},
+};
+<span class="kw">use </span>std::time::Duration;
+
+<span class="kw">let </span>service = ServiceBuilder::new()
+    .layer(
+        TraceLayer::new_for_server_errors()
+            .make_span_with(
+                DefaultMakeSpan::new().include_headers(<span class="bool-val">true</span>)
+            )
+            .on_request(
+                DefaultOnRequest::new().level(Level::INFO)
+            )
+            .on_response(
+                DefaultOnResponse::new()
+                    .level(Level::INFO)
+                    .latency_unit(LatencyUnit::Micros)
+            )
+            <span class="comment">// on so on for `on_failure`
+    </span>)
+    .service_fn(handle);</code></pre></div>
+<p>However for maximum control you can provide callbacks:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>anemo::{Request, Response};
+<span class="kw">use </span>bytes::Bytes;
+<span class="kw">use </span>tower::ServiceBuilder;
+<span class="kw">use </span>anemo_tower::trace::TraceLayer;
+<span class="kw">use </span>anemo_tower::classify::StatusInRangeFailureClass;
+<span class="kw">use </span>std::time::Duration;
+<span class="kw">use </span>tracing::Span;
+
+<span class="kw">let </span>service = ServiceBuilder::new()
+    .layer(
+        TraceLayer::new_for_server_errors()
+            .make_span_with(|request: <span class="kw-2">&amp;</span>Request&lt;Bytes&gt;| {
+                <span class="macro">tracing::debug_span!</span>(<span class="string">"anemo-request"</span>)
+            })
+            .on_request(|request: <span class="kw-2">&amp;</span>Request&lt;Bytes&gt;, _span: <span class="kw-2">&amp;</span>Span| {
+                <span class="macro">tracing::debug!</span>(<span class="string">"started {}"</span>, request.route())
+            })
+            .on_response(|response: <span class="kw-2">&amp;</span>Response&lt;Bytes&gt;, latency: Duration, _span: <span class="kw-2">&amp;</span>Span| {
+                <span class="macro">tracing::debug!</span>(<span class="string">"response generated in {:?}"</span>, latency)
+            })
+            .on_failure(|class: StatusInRangeFailureClass, latency: Duration, _span: <span class="kw-2">&amp;</span>Span| {
+                <span class="macro">tracing::debug!</span>(<span class="string">"something went wrong"</span>)
+            })
+    )
+    .service_fn(handle);</code></pre></div>
+<h3 id="disabling-something"><a class="doc-anchor" href="#disabling-something">§</a>Disabling something</h3>
+<p>Setting the behaviour to <code>()</code> will be disable that particular step:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>tower::ServiceBuilder;
+<span class="kw">use </span>anemo_tower::trace::TraceLayer;
+<span class="kw">use </span>anemo_tower::classify::StatusInRangeFailureClass;
+<span class="kw">use </span>std::time::Duration;
+<span class="kw">use </span>tracing::Span;
+
+<span class="kw">let </span>service = ServiceBuilder::new()
+    .layer(
+        <span class="comment">// This configuration will only emit events on failures
+        </span>TraceLayer::new_for_server_errors()
+            .on_request(())
+            .on_response(())
+            .on_failure(|class: StatusInRangeFailureClass, latency: Duration, _span: <span class="kw-2">&amp;</span>Span| {
+                <span class="macro">tracing::debug!</span>(<span class="string">"something went wrong"</span>)
+            })
+    )
+    .service_fn(handle);</code></pre></div>
+<h2 id="when-the-callbacks-are-called"><a class="doc-anchor" href="#when-the-callbacks-are-called">§</a>When the callbacks are called</h2><h4 id="on_request"><a class="doc-anchor" href="#on_request">§</a><code>on_request</code></h4>
+<p>The <code>on_request</code> callback is called when the request arrives at the
+middleware in <a href="tower::Service::call"><code>Service::call</code></a> just prior to passing the request to the
+inner service.</p>
+<h4 id="on_response"><a class="doc-anchor" href="#on_response">§</a><code>on_response</code></h4>
+<p>The <code>on_response</code> callback is called when the inner service’s response
+future completes with <code>Ok(response)</code> regardless if the response is
+classified as a success or a failure.</p>
+<p>For example if you’re using <a href="../classify/struct.StatusInRangeAsFailures.html#method.new_for_server_errors" title="associated function anemo_tower::classify::StatusInRangeAsFailures::new_for_server_errors"><code>StatusInRangeAsFailures::new_for_server_errors</code></a> as your
+classifier and the inner service responds with <code>500 Internal Server Error</code> then the
+<code>on_response</code> callback is still called. <code>on_failure</code> would <em>also</em> be called in this case since
+the response was classified as a failure.</p>
+<h4 id="on_failure"><a class="doc-anchor" href="#on_failure">§</a><code>on_failure</code></h4>
+<p>The <code>on_failure</code> callback is called when:</p>
+<ul>
+<li>The inner <a href="tower::Service"><code>Service</code></a>’s response future resolves to an error.</li>
+<li>A response is classified as a failure.</li>
+</ul>
+<h2 id="recording-fields-on-the-span"><a class="doc-anchor" href="#recording-fields-on-the-span">§</a>Recording fields on the span</h2>
+<p>All callbacks receive a reference to the <a href="https://crates.io/crates/tracing">tracing</a> <a href="tracing::Span"><code>Span</code></a>, corresponding to this request,
+produced by the closure passed to <a href="struct.TraceLayer.html#method.make_span_with" title="method anemo_tower::trace::TraceLayer::make_span_with"><code>TraceLayer::make_span_with</code></a>. It can be used to <a href="https://docs.rs/tracing/latest/tracing/span/struct.Span.html#method.record">record
+field values</a> that weren’t known when the span was created.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>anemo::{Request, Response};
+<span class="kw">use </span>bytes::Bytes;
+<span class="kw">use </span>tower::ServiceBuilder;
+<span class="kw">use </span>anemo_tower::trace::TraceLayer;
+<span class="kw">use </span>tracing::Span;
+<span class="kw">use </span>std::time::Duration;
+
+<span class="kw">let </span>service = ServiceBuilder::new()
+    .layer(
+        TraceLayer::new_for_server_errors()
+            .make_span_with(|request: <span class="kw-2">&amp;</span>Request&lt;Bytes&gt;| {
+                <span class="macro">tracing::debug_span!</span>(
+                    <span class="string">"anemo-request"</span>,
+                    status_code = tracing::field::Empty,
+                )
+            })
+            .on_response(|response: <span class="kw-2">&amp;</span>Response&lt;Bytes&gt;, _latency: Duration, span: <span class="kw-2">&amp;</span>Span| {
+                span.record(<span class="string">"status_code"</span>, <span class="kw-2">&amp;</span>tracing::field::display(response.status().to_u16()));
+
+                <span class="macro">tracing::debug!</span>(<span class="string">"response generated"</span>)
+            })
+    )
+    .service_fn(handle);</code></pre></div>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.DefaultMakeSpan.html" title="struct anemo_tower::trace::DefaultMakeSpan">DefaultMakeSpan</a></div><div class="desc docblock-short">The default way <a href="tracing::Span"><code>Span</code></a>s will be created for <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.DefaultOnFailure.html" title="struct anemo_tower::trace::DefaultOnFailure">DefaultOnFailure</a></div><div class="desc docblock-short">The default <a href="trait.OnFailure.html" title="trait anemo_tower::trace::OnFailure"><code>OnFailure</code></a> implementation used by <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.DefaultOnRequest.html" title="struct anemo_tower::trace::DefaultOnRequest">DefaultOnRequest</a></div><div class="desc docblock-short">The default <a href="trait.OnRequest.html" title="trait anemo_tower::trace::OnRequest"><code>OnRequest</code></a> implementation used by <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.DefaultOnResponse.html" title="struct anemo_tower::trace::DefaultOnResponse">DefaultOnResponse</a></div><div class="desc docblock-short">The default <a href="trait.OnResponse.html" title="trait anemo_tower::trace::OnResponse"><code>OnResponse</code></a> implementation used by <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.ResponseFuture.html" title="struct anemo_tower::trace::ResponseFuture">ResponseFuture</a></div><div class="desc docblock-short">Response future for <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.Trace.html" title="struct anemo_tower::trace::Trace">Trace</a></div><div class="desc docblock-short">Middleware that adds high level <a href="https://crates.io/crates/tracing">tracing</a> to a <a href="tower::Service"><code>Service</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.TraceLayer.html" title="struct anemo_tower::trace::TraceLayer">TraceLayer</a></div><div class="desc docblock-short"><a href="tower::layer::Layer"><code>Layer</code></a> that adds high level <a href="https://crates.io/crates/tracing">tracing</a> to a <a href="tower::Service"><code>Service</code></a>.</div></li></ul><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="trait" href="trait.MakeSpan.html" title="trait anemo_tower::trace::MakeSpan">MakeSpan</a></div><div class="desc docblock-short">Trait used to generate <a href="tracing::Span"><code>Span</code></a>s from requests. <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a> wraps all request handling in this
+span.</div></li><li><div class="item-name"><a class="trait" href="trait.OnFailure.html" title="trait anemo_tower::trace::OnFailure">OnFailure</a></div><div class="desc docblock-short">Trait used to tell <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a> what to do when a request fails.</div></li><li><div class="item-name"><a class="trait" href="trait.OnRequest.html" title="trait anemo_tower::trace::OnRequest">OnRequest</a></div><div class="desc docblock-short">Trait used to tell <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a> what to do when a request is received.</div></li><li><div class="item-name"><a class="trait" href="trait.OnResponse.html" title="trait anemo_tower::trace::OnResponse">OnResponse</a></div><div class="desc docblock-short">Trait used to tell <a href="struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a> what to do when a response has been produced.</div></li></ul></section></div></main></body></html>

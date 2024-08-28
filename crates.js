@@ -1,0 +1,1 @@
+window.ALL_CRATES = ["anemo","anemo_build","anemo_cli","anemo_tower","examples","greeter","greeter_cli"];

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["greeter"],"struct":["HelloRequest","HelloResponse","MyGreeter"]};

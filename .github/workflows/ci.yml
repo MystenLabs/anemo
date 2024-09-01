@@ -46,5 +46,7 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - run: sudo apt install postgres
+      - run: sudo apt install postgresql
       - run: which postgres
+      - run: which pg_isready
+      - run: which initdb

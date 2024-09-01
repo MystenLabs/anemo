@@ -50,6 +50,7 @@ jobs:
       - run: which psql
       - run: ls /usr/bin
       - run: ls /usr/lib/postgresql/14/bin
+      - run: echo "/usr/lib/postgresql/14/bin" >> $GITHUB_PATH
       - run: which postgres
       - run: which pg_isready
       - run: which initdb

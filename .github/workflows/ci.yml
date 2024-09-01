@@ -46,4 +46,5 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - run: sudo apt install postgres
       - run: which postgres

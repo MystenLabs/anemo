@@ -49,6 +49,7 @@ jobs:
       # - run: sudo apt install postgresql
       - run: which psql
       - run: ls /usr/bin
+      - run: ls /usr/lib/postgresql
       - run: which postgres
       - run: which pg_isready
       - run: which initdb

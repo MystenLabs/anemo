@@ -743,6 +743,20 @@ impl KnownPeers {
         self.inner_mut().insert(peer_info.peer_id, peer_info)
     }
 
+    pub fn batch_update<'a>(
+        &'a self,
+        to_remove: impl Iterator<Item = &'a PeerId>,
+        to_insert: impl Iterator<Item = PeerInfo>,
+    ) {
+        let mut inner = self.inner_mut();
+        to_remove.for_each(|peer_id| {
+            let _ = inner.remove(peer_id);
+        });
+        to_insert.for_each(|peer_info| {
+            let _ = inner.insert(peer_info.peer_id, peer_info);
+        });
+    }
+
     fn inner(&self) -> std::sync::RwLockReadGuard<'_, HashMap<PeerId, PeerInfo>> {
         self.0.read().unwrap()
     }

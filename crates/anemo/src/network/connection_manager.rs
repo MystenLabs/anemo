@@ -747,14 +747,13 @@ impl KnownPeers {
         &'a self,
         to_remove: impl Iterator<Item = &'a PeerId>,
         to_insert: impl Iterator<Item = PeerInfo>,
-    ) {
+    ) -> (Vec<Option<PeerInfo>>, Vec<Option<PeerInfo>>) {
         let mut inner = self.inner_mut();
-        to_remove.for_each(|peer_id| {
-            let _ = inner.remove(peer_id);
-        });
-        to_insert.for_each(|peer_info| {
-            let _ = inner.insert(peer_info.peer_id, peer_info);
-        });
+        let removed = to_remove.map(|peer_id| inner.remove(peer_id)).collect();
+        let inserted = to_insert
+            .map(|peer_info| inner.insert(peer_info.peer_id, peer_info))
+            .collect();
+        (removed, inserted)
     }
 
     fn inner(&self) -> std::sync::RwLockReadGuard<'_, HashMap<PeerId, PeerInfo>> {

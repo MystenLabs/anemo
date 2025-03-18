@@ -744,7 +744,7 @@ impl KnownPeers {
     }
 
     pub fn batch_update<'a>(
-        &'a self,
+        &self,
         to_remove: impl Iterator<Item = &'a PeerId>,
         to_insert: impl Iterator<Item = PeerInfo>,
     ) -> (Vec<Option<PeerInfo>>, Vec<Option<PeerInfo>>) {

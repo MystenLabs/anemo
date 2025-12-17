@@ -1,5 +1,5 @@
 /// Representation of a network address that is dial-able in Anemo
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Address {
     /// A plain SocketAddr
     SocketAddr(std::net::SocketAddr),

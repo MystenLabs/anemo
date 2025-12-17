@@ -43,7 +43,7 @@ pub mod header {
     pub const TIMEOUT: &str = "timeout";
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeerAffinity {
     /// Always attempt to maintain a connection with this Peer.
     High,
@@ -54,7 +54,7 @@ pub enum PeerAffinity {
     Never,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerInfo {
     pub peer_id: PeerId,
     pub affinity: PeerAffinity,

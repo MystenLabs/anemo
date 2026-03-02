@@ -326,9 +326,12 @@ fn pki_error(error: webpki::Error) -> rustls::Error {
         BadDer | BadDerTime => {
             rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding)
         }
+        #[allow(deprecated)]
         InvalidSignatureForPublicKey
         | UnsupportedSignatureAlgorithm
-        | UnsupportedSignatureAlgorithmForPublicKey => {
+        | UnsupportedSignatureAlgorithmForPublicKey
+        | UnsupportedSignatureAlgorithmContext(..)
+        | UnsupportedSignatureAlgorithmForPublicKeyContext(..) => {
             rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature)
         }
         e => {

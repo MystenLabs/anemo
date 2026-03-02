@@ -48,10 +48,11 @@ impl RawResponseHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
 #[non_exhaustive]
 pub enum StatusCode {
+    #[default]
     Success = 200,
     BadRequest = 400,
     NotFound = 404,
@@ -102,12 +103,6 @@ impl StatusCode {
     #[inline]
     pub fn is_server_error(self) -> bool {
         500 <= self.to_u16() && self.to_u16() <= 599
-    }
-}
-
-impl Default for StatusCode {
-    fn default() -> Self {
-        Self::Success
     }
 }
 

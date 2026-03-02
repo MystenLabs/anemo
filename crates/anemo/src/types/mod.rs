@@ -9,9 +9,10 @@ pub use peer_id::{ConnectionOrigin, Direction, PeerId};
 pub use http::Extensions;
 use quinn::ConnectionError;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
 pub enum Version {
+    #[default]
     V1 = 1,
 }
 
@@ -25,12 +26,6 @@ impl Version {
 
     pub fn to_u16(self) -> u16 {
         self as u16
-    }
-}
-
-impl Default for Version {
-    fn default() -> Self {
-        Self::V1
     }
 }
 

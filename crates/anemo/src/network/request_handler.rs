@@ -1,3 +1,4 @@
+use super::wire::MessageFrameCodec;
 use super::{
     wire::{network_message_frame_codec, read_request, write_response},
     ActivePeers,
@@ -10,7 +11,7 @@ use bytes::Bytes;
 use quinn::RecvStream;
 use std::convert::Infallible;
 use std::sync::Arc;
-use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite};
 use tower::{util::BoxCloneService, ServiceExt};
 use tracing::{debug, trace};
 
@@ -121,8 +122,8 @@ impl InboundRequestHandler {
 struct BiStreamRequestHandler {
     connection: Connection,
     service: BoxCloneService<Request<Bytes>, Response<Bytes>, Infallible>,
-    send_stream: FramedWrite<SendStream, LengthDelimitedCodec>,
-    recv_stream: FramedRead<RecvStream, LengthDelimitedCodec>,
+    send_stream: FramedWrite<SendStream, MessageFrameCodec>,
+    recv_stream: FramedRead<RecvStream, MessageFrameCodec>,
 }
 
 impl BiStreamRequestHandler {

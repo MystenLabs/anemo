@@ -1,5 +1,7 @@
 use super::{
-    wire::{network_message_frame_codec, read_response, write_request},
+    wire::{
+        read_response, request_message_frame_codec, response_message_frame_codec, write_request,
+    },
     OutboundRequestLayer,
 };
 use crate::{connection::Connection, Config, PeerId, Request, Response, Result};
@@ -50,9 +52,9 @@ impl Peer {
     async fn do_rpc(&self, request: Request<Bytes>) -> Result<Response<Bytes>> {
         let (send_stream, recv_stream) = self.connection.open_bi().await?;
         let mut send_stream =
-            FramedWrite::new(send_stream, network_message_frame_codec(&self.config));
+            FramedWrite::new(send_stream, request_message_frame_codec(&self.config));
         let mut recv_stream =
-            FramedRead::new(recv_stream, network_message_frame_codec(&self.config));
+            FramedRead::new(recv_stream, response_message_frame_codec(&self.config));
 
         //
         // Write Request

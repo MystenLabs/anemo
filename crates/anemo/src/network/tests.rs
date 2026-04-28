@@ -1,4 +1,4 @@
-use crate::{types::PeerEvent, Network, NetworkRef, Request, Response, Result};
+use crate::{types::PeerEvent, Config, Network, NetworkRef, Request, Response, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::FutureExt;
 use std::{convert::Infallible, time::Duration};
@@ -865,6 +865,107 @@ async fn network_ref_via_extension() -> Result<()> {
         .into_inner();
 
     assert_eq!(1, response.get_u8());
+
+    Ok(())
+}
+
+fn build_network_with_config(config: Config) -> Result<Network> {
+    let network = Network::bind("localhost:0")
+        .random_private_key()
+        .server_name("test")
+        .config(config)
+        .start(echo_service())?;
+
+    trace!(
+        address =% network.local_addr(),
+        peer_id =% network.peer_id(),
+        "starting network"
+    );
+
+    Ok(network)
+}
+
+#[tokio::test]
+async fn server_max_request_frame_size_rejects_large_requests() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let server = build_network_with_config(Config {
+        max_request_frame_size: Some(128),
+        ..Default::default()
+    })?;
+    let client = build_network()?;
+
+    let peer = client.connect(server.local_addr()).await?;
+
+    // Request body within the server's request limit succeeds.
+    let small = vec![0u8; 32];
+    let response = client.rpc(peer, Request::new(small.clone().into())).await?;
+    assert_eq!(response.into_body().as_ref(), small.as_slice());
+
+    // Request body exceeding the server's request limit is rejected by the server,
+    // and the client sees the RPC fail.
+    let big = vec![0u8; 4096];
+    client
+        .rpc(peer, Request::new(big.into()))
+        .await
+        .unwrap_err();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn client_max_response_frame_size_rejects_large_responses() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let server = build_network()?;
+    let client = build_network_with_config(Config {
+        max_response_frame_size: Some(128),
+        ..Default::default()
+    })?;
+
+    let peer = client.connect(server.local_addr()).await?;
+
+    // Response body within the client's response limit succeeds.
+    let small = vec![0u8; 32];
+    let response = client.rpc(peer, Request::new(small.clone().into())).await?;
+    assert_eq!(response.into_body().as_ref(), small.as_slice());
+
+    // The echoed response exceeds the client's response limit. The request itself
+    // is still within the (default) request limit, so it leaves the client and the
+    // server processes it; the failure happens when the client tries to decode the
+    // response.
+    let big = vec![0u8; 4096];
+    client
+        .rpc(peer, Request::new(big.into()))
+        .await
+        .unwrap_err();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn max_frame_size_falls_back_for_both_directions() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    // Setting only the legacy `max_frame_size` should constrain both directions,
+    // matching pre-existing behavior.
+    let server = build_network_with_config(Config {
+        max_frame_size: Some(128),
+        ..Default::default()
+    })?;
+    let client = build_network()?;
+
+    let peer = client.connect(server.local_addr()).await?;
+
+    let small = vec![0u8; 32];
+    let response = client.rpc(peer, Request::new(small.clone().into())).await?;
+    assert_eq!(response.into_body().as_ref(), small.as_slice());
+
+    let big = vec![0u8; 4096];
+    client
+        .rpc(peer, Request::new(big.into()))
+        .await
+        .unwrap_err();
 
     Ok(())
 }

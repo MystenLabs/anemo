@@ -91,11 +91,25 @@ pub struct Config {
 
     /// Set the maximum frame size in bytes.
     ///
-    /// This controls the maximum size of a request or response.
+    /// This controls the maximum size of a request or response. Acts as the default
+    /// for both directions when [`Config::max_request_frame_size`] or
+    /// [`Config::max_response_frame_size`] are not set.
     ///
     /// If unspecified, there will be no limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_frame_size: Option<usize>,
+
+    /// Set the maximum frame size in bytes for request messages.
+    ///
+    /// If unspecified, falls back to [`Config::max_frame_size`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_request_frame_size: Option<usize>,
+
+    /// Set the maximum frame size in bytes for response messages.
+    ///
+    /// If unspecified, falls back to [`Config::max_frame_size`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_response_frame_size: Option<usize>,
 
     /// Set a timeout, in milliseconds, for all inbound requests.
     ///
@@ -271,8 +285,12 @@ impl Config {
             .unwrap_or(PEER_EVENT_BROADCAST_CHANNEL_CAPACITY)
     }
 
-    pub(crate) fn max_frame_size(&self) -> Option<usize> {
-        self.max_frame_size
+    pub(crate) fn max_request_frame_size(&self) -> Option<usize> {
+        self.max_request_frame_size.or(self.max_frame_size)
+    }
+
+    pub(crate) fn max_response_frame_size(&self) -> Option<usize> {
+        self.max_response_frame_size.or(self.max_frame_size)
     }
 
     pub(crate) fn inbound_request_timeout(&self) -> Option<Duration> {

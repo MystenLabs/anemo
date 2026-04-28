@@ -1,6 +1,8 @@
 use super::wire::MessageFrameCodec;
 use super::{
-    wire::{network_message_frame_codec, read_request, write_response},
+    wire::{
+        read_request, request_message_frame_codec, response_message_frame_codec, write_response,
+    },
     ActivePeers,
 };
 use crate::{
@@ -137,8 +139,8 @@ impl BiStreamRequestHandler {
         Self {
             connection,
             service,
-            send_stream: FramedWrite::new(send_stream, network_message_frame_codec(config)),
-            recv_stream: FramedRead::new(recv_stream, network_message_frame_codec(config)),
+            send_stream: FramedWrite::new(send_stream, response_message_frame_codec(config)),
+            recv_stream: FramedRead::new(recv_stream, request_message_frame_codec(config)),
         }
     }
 

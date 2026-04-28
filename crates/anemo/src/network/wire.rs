@@ -125,7 +125,7 @@ impl Encoder<Bytes> for MessageFrameCodec {
 /// Returns a message frame codec sized for request messages.
 pub(crate) fn request_message_frame_codec(config: &Config) -> MessageFrameCodec {
     let max_frame_length = config
-        .max_request_frame_size()
+        .request_frame_size()
         .unwrap_or(DEFAULT_MAX_FRAME_LENGTH);
     MessageFrameCodec::new(max_frame_length)
 }
@@ -133,7 +133,7 @@ pub(crate) fn request_message_frame_codec(config: &Config) -> MessageFrameCodec 
 /// Returns a message frame codec sized for response messages.
 pub(crate) fn response_message_frame_codec(config: &Config) -> MessageFrameCodec {
     let max_frame_length = config
-        .max_response_frame_size()
+        .response_frame_size()
         .unwrap_or(DEFAULT_MAX_FRAME_LENGTH);
     MessageFrameCodec::new(max_frame_length)
 }

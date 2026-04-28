@@ -285,11 +285,11 @@ impl Config {
             .unwrap_or(PEER_EVENT_BROADCAST_CHANNEL_CAPACITY)
     }
 
-    pub(crate) fn max_request_frame_size(&self) -> Option<usize> {
+    pub(crate) fn request_frame_size(&self) -> Option<usize> {
         self.max_request_frame_size.or(self.max_frame_size)
     }
 
-    pub(crate) fn max_response_frame_size(&self) -> Option<usize> {
+    pub(crate) fn response_frame_size(&self) -> Option<usize> {
         self.max_response_frame_size.or(self.max_frame_size)
     }
 

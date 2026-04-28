@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     convert::Infallible,
     fmt,
+    marker::PhantomData,
     sync::Arc,
 };
 use tower::{
@@ -32,21 +33,52 @@ impl RouteId {
     }
 }
 
+/// Marker type for a [`Router`] that is still accepting service registrations.
+///
+/// In this state the router exposes [`Router::route`], [`Router::add_rpc_service`],
+/// and [`Router::merge`]. Calling [`Router::route_layer`] consumes the router and
+/// returns one in the [`ServicesSealed`] state — no further services can be added
+/// after that point.
+pub struct ServicesOpen;
+
+/// Marker type for a [`Router`] that has been sealed by applying a layer.
+///
+/// In this state the router exposes only [`Router::route_layer`] (to stack
+/// additional layers); attempting to add services is a compile error.
+pub struct ServicesSealed;
+
 /// The router type for composing handlers and services.
-#[derive(Clone)]
-pub struct Router {
+///
+/// `Router` carries a typestate parameter `S` that distinguishes a router which
+/// is still accepting service registrations ([`ServicesOpen`], the default)
+/// from one which has had a layer applied and can therefore no longer accept
+/// new services ([`ServicesSealed`]).
+pub struct Router<S = ServicesOpen> {
     routes: BTreeMap<RouteId, Route>,
     matcher: RouteMatcher,
     fallback: Route,
+    _state: PhantomData<fn() -> S>,
 }
 
-impl Router {
+impl<S> Clone for Router<S> {
+    fn clone(&self) -> Self {
+        Self {
+            routes: self.routes.clone(),
+            matcher: self.matcher.clone(),
+            fallback: self.fallback.clone(),
+            _state: PhantomData,
+        }
+    }
+}
+
+impl Router<ServicesOpen> {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             routes: Default::default(),
             matcher: Default::default(),
             fallback: Route::new(not_found::NotFound),
+            _state: PhantomData,
         }
     }
 
@@ -64,7 +96,9 @@ impl Router {
             panic!("Paths must start with a `/`");
         }
 
-        if <dyn std::any::Any>::downcast_ref::<Self>(&service).is_some() {
+        if <dyn std::any::Any>::downcast_ref::<Router<ServicesOpen>>(&service).is_some()
+            || <dyn std::any::Any>::downcast_ref::<Router<ServicesSealed>>(&service).is_some()
+        {
             panic!("Invalid route: `Router::route` cannot be used with `Router`s.")
         }
 
@@ -95,18 +129,20 @@ impl Router {
         self.route(&path, service)
     }
 
-    /// Merge two routers into one.
+    /// Merge another router's routes into this one.
     ///
     /// This is useful for breaking apps into smaller pieces and combining them
-    /// into one.
-    pub fn merge<R>(mut self, other: R) -> Self
+    /// into one. The other router may itself be in either typestate; any layers
+    /// it has already applied remain baked into the imported routes.
+    pub fn merge<S2, R>(mut self, other: R) -> Self
     where
-        R: Into<Router>,
+        R: Into<Router<S2>>,
     {
         let Router {
             routes,
             matcher,
             fallback,
+            _state: _,
         } = other.into();
 
         for (id, route) in routes {
@@ -124,8 +160,37 @@ impl Router {
         self
     }
 
-    /// Apply a [`tower::Layer`] to the router that will only run if the request matches
-    /// a route.
+    /// Apply a [`tower::Layer`] to all currently registered routes, returning a
+    /// [`Router<ServicesSealed>`]. To stack additional layers, chain further
+    /// calls to [`Router::route_layer`] on the returned router.
+    pub fn route_layer<L>(self, layer: L) -> Router<ServicesSealed>
+    where
+        L: tower::Layer<Route>,
+        L::Service: Service<Request<Bytes>, Response = Response<Bytes>, Error = Infallible>
+            + Clone
+            + Send
+            + 'static,
+        <L::Service as Service<Request<Bytes>>>::Future: Send + 'static,
+    {
+        let Router {
+            routes,
+            matcher,
+            fallback,
+            _state: _,
+        } = self;
+
+        Router {
+            routes: layer_routes(routes, layer),
+            matcher,
+            fallback,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl Router<ServicesSealed> {
+    /// Apply an additional [`tower::Layer`] on top of the layers already applied
+    /// to this router's routes.
     pub fn route_layer<L>(self, layer: L) -> Self
     where
         L: tower::Layer<Route>,
@@ -139,25 +204,34 @@ impl Router {
             routes,
             matcher,
             fallback,
+            _state: _,
         } = self;
 
-        let routes = routes
-            .into_iter()
-            .map(|(id, route)| {
-                let route = Route::new(layer.layer(route));
-                (id, route)
-            })
-            .collect();
-
         Router {
-            routes,
+            routes: layer_routes(routes, layer),
             matcher,
             fallback,
+            _state: PhantomData,
         }
     }
 }
 
-impl Service<Request<Bytes>> for Router {
+fn layer_routes<L>(routes: BTreeMap<RouteId, Route>, layer: L) -> BTreeMap<RouteId, Route>
+where
+    L: tower::Layer<Route>,
+    L::Service: Service<Request<Bytes>, Response = Response<Bytes>, Error = Infallible>
+        + Clone
+        + Send
+        + 'static,
+    <L::Service as Service<Request<Bytes>>>::Future: Send + 'static,
+{
+    routes
+        .into_iter()
+        .map(|(id, route)| (id, Route::new(layer.layer(route))))
+        .collect()
+}
+
+impl<S> Service<Request<Bytes>> for Router<S> {
     type Response = Response<Bytes>;
     type Error = Infallible;
     type Future =
@@ -415,19 +489,17 @@ mod test {
     }
 
     #[tokio::test]
-    async fn middleware_applies_to_routes_above() {
-        let pending =
+    async fn middleware_applies_to_all_routes_registered_before_seal() {
+        let pending_one =
             tower::service_fn(|_request| async { std::future::pending::<Result<_, _>>().await });
-        let ready = tower::service_fn(|_request| async {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            Ok(Response::new(Bytes::from_static(b"ready!")))
-        });
+        let pending_two =
+            tower::service_fn(|_request| async { std::future::pending::<Result<_, _>>().await });
         let router = Router::new()
-            .route("/one", pending)
+            .route("/one", pending_one)
+            .route("/two", pending_two)
             .route_layer(crate::middleware::timeout::inbound::TimeoutLayer::new(
                 Some(std::time::Duration::new(0, 0)),
-            ))
-            .route("/two", ready);
+            ));
 
         let request = Request::new(Bytes::new()).with_route("/one");
         let response = router.clone().oneshot(request).await.unwrap();
@@ -435,6 +507,23 @@ mod test {
 
         let request = Request::new(Bytes::new()).with_route("/two");
         let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::RequestTimeout);
+    }
+
+    #[tokio::test]
+    async fn stacked_layers_compose_on_sealed_router() {
+        let ready = tower::service_fn(|_request| async {
+            Ok(Response::new(Bytes::from_static(b"ready!")))
+        });
+        // The first call to `route_layer` returns Router<ServicesSealed>; the
+        // second is the impl on the sealed state, stacking another layer.
+        let router = Router::new()
+            .route("/one", ready)
+            .route_layer(tower::layer::util::Identity::new())
+            .route_layer(tower::layer::util::Identity::new());
+
+        let request = Request::new(Bytes::new()).with_route("/one");
+        let response = router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::Success);
     }
 

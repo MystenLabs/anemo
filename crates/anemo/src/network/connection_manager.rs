@@ -148,7 +148,18 @@ impl ConnectionManager {
                     }
                 },
                 Some(connecting_output) = self.pending_connections.join_next() => {
-                    self.handle_connecting_result(connecting_output.unwrap());
+                    match connecting_output {
+                        Ok(out) => {
+                            self.handle_connecting_result(out);
+                        },
+                        Err(e) => {
+                            if e.is_cancelled() {
+                                debug!("Pending connection cancelled");
+                            } else if e.is_panic() {
+                                std::panic::resume_unwind(e.into_panic());
+                            }
+                        },
+                    }
                 },
                 Some(connection_handler_output) = self.connection_handlers.join_next() => {
                     // If a task panics, just propagate it

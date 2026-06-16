@@ -103,9 +103,9 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inbound_connection_rate_limit_per_ip: Option<u32>,
 
-    /// Token-bucket burst size for [`Config::inbound_connection_rate_limit_per_ip`],
-    /// i.e. the maximum number of inbound connections from a single source IP that
-    /// may be admitted in an instantaneous burst.
+    /// Token-bucket burst size for `inbound_connection_rate_limit_per_ip`, i.e. the
+    /// maximum number of inbound connections from a single source IP that may be
+    /// admitted in an instantaneous burst.
     ///
     /// If unspecified, this defaults to `100`.
     #[serde(skip_serializing_if = "Option::is_none")]

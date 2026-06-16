@@ -8,7 +8,7 @@ use rcgen::{CertificateParams, KeyPair};
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::PrivateKeyDer;
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 /// Configuration for a [`Network`](crate::Network).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -80,6 +80,36 @@ pub struct Config {
     /// [`Network::connect_with_peer_id`]: crate::Network::connect_with_peer_id
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_concurrent_connections: Option<usize>,
+
+    /// Whether to require QUIC source-address validation (via a stateless Retry
+    /// packet) before beginning the TLS handshake for an inbound connection whose
+    /// source address has not yet been validated.
+    ///
+    /// When enabled, the first attempt from an unvalidated address is answered with
+    /// a Retry instead of starting the handshake, forcing the peer to prove it can
+    /// receive traffic at its claimed address.
+    ///
+    /// If unspecified, this defaults to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_inbound_address_validation: Option<bool>,
+
+    /// Maximum sustained rate, per source IP, of new inbound connections admitted to
+    /// the TLS handshake, as a token-bucket refill rate in connections per second.
+    /// Inbound attempts from a source IP exceeding this rate are dropped before the
+    /// handshake begins.
+    ///
+    /// If unspecified, this defaults to `10`. Setting it to `0` disables per-IP
+    /// inbound connection rate limiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_connection_rate_limit_per_ip: Option<u32>,
+
+    /// Token-bucket burst size for [`Config::inbound_connection_rate_limit_per_ip`],
+    /// i.e. the maximum number of inbound connections from a single source IP that
+    /// may be admitted in an instantaneous burst.
+    ///
+    /// If unspecified, this defaults to `100`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inbound_connection_rate_limit_burst_per_ip: Option<u32>,
 
     /// Size of the broadcast channel use for subscribing to
     /// [`PeerEvent`](crate::types::PeerEvent)s via
@@ -276,6 +306,34 @@ impl Config {
 
     pub(crate) fn max_concurrent_connections(&self) -> Option<usize> {
         self.max_concurrent_connections
+    }
+
+    pub(crate) fn require_inbound_address_validation(&self) -> bool {
+        const DEFAULT: bool = true;
+
+        self.require_inbound_address_validation.unwrap_or(DEFAULT)
+    }
+
+    /// Sustained per-source-IP inbound connection admission rate in connections per
+    /// second. Returns `None` only when explicitly disabled by configuring `0`.
+    pub(crate) fn inbound_connection_rate_limit_per_ip(&self) -> Option<NonZeroU32> {
+        const DEFAULT_RATE_PER_SEC: u32 = 10;
+
+        // `NonZeroU32::new` yields `None` for a configured `0`, i.e. rate limiting off.
+        NonZeroU32::new(
+            self.inbound_connection_rate_limit_per_ip
+                .unwrap_or(DEFAULT_RATE_PER_SEC),
+        )
+    }
+
+    pub(crate) fn inbound_connection_rate_limit_burst_per_ip(&self) -> NonZeroU32 {
+        const DEFAULT_BURST: u32 = 100;
+
+        // A configured burst of `0` is nonsensical (it would admit nothing); fall back
+        // to the default in that case as well as when unset.
+        self.inbound_connection_rate_limit_burst_per_ip
+            .and_then(NonZeroU32::new)
+            .unwrap_or_else(|| NonZeroU32::new(DEFAULT_BURST).expect("DEFAULT_BURST is nonzero"))
     }
 
     pub(crate) fn peer_event_broadcast_channel_capacity(&self) -> usize {

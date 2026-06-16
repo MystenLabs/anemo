@@ -26,6 +26,7 @@ use connection_manager::{
 mod peer;
 pub use peer::Peer;
 
+mod inbound_rate_limit;
 mod request_handler;
 mod wire;
 

@@ -154,14 +154,68 @@ pin_project_lite::pin_project! {
 }
 
 impl Future for Accept<'_> {
-    type Output = Option<Connecting>;
+    type Output = Option<Incoming>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.project().inner.poll(ctx).map(|maybe_connecting| {
-            maybe_connecting
-                .and_then(|incoming| incoming.accept().ok())
-                .map(Connecting::new_inbound)
-        })
+        self.project()
+            .inner
+            .poll(ctx)
+            .map(|maybe_incoming| maybe_incoming.map(Incoming::new))
+    }
+}
+
+/// An inbound connection attempt for which the server has not yet begun the TLS
+/// handshake.
+///
+/// Yielded by [`Endpoint::accept`]. Admission decisions (source-address validation,
+/// rate limiting) are made against this type before calling [`Incoming::accept`],
+/// which is what begins the handshake.
+#[derive(Debug)]
+#[must_use = "an Incoming must be accepted, retried, or ignored"]
+pub(crate) struct Incoming(quinn::Incoming);
+
+impl Incoming {
+    pub(crate) fn new(inner: quinn::Incoming) -> Self {
+        Self(inner)
+    }
+
+    /// The remote peer's UDP socket address.
+    pub(crate) fn remote_address(&self) -> SocketAddr {
+        self.0.remote_address()
+    }
+
+    /// Whether the peer has proved it can receive traffic at `remote_address()`.
+    pub(crate) fn remote_address_validated(&self) -> bool {
+        self.0.remote_address_validated()
+    }
+
+    /// Ensure the peer's source address is validated before the handshake.
+    ///
+    /// If the address is already validated, returns the attempt so the caller can
+    /// proceed. Otherwise sends a stateless Retry packet and consumes the attempt
+    /// (returning `None`); the peer must re-initiate from a validated address.
+    #[must_use = "a returned Incoming must be accepted or ignored"]
+    pub(crate) fn validate_source(self) -> Option<Incoming> {
+        if self.remote_address_validated() {
+            return Some(self);
+        }
+        // The address is unvalidated, so a Retry is always legal here: quinn
+        // guarantees may_retry() whenever the address is unvalidated.
+        let _ = self.0.retry();
+        None
+    }
+
+    /// Drop the attempt without sending any response packet.
+    pub(crate) fn ignore(self) {
+        self.0.ignore()
+    }
+
+    /// Begin the handshake for this connection.
+    pub(crate) fn accept(self) -> Result<Connecting> {
+        self.0
+            .accept()
+            .map_err(anyhow::Error::from)
+            .map(Connecting::new_inbound)
     }
 }
 
@@ -237,7 +291,14 @@ mod test {
         };
 
         let peer_2 = async move {
-            let connection = endpoint_2.accept().await.unwrap().await.unwrap();
+            let connection = endpoint_2
+                .accept()
+                .await
+                .unwrap()
+                .accept()
+                .unwrap()
+                .await
+                .unwrap();
             assert_eq!(connection.peer_id(), peer_id_1);
 
             let mut recv = connection.accept_uni().await.unwrap();
@@ -299,10 +360,24 @@ mod test {
         };
 
         let peer_2 = async move {
-            let connection_1 = endpoint_2.accept().await.unwrap().await.unwrap();
+            let connection_1 = endpoint_2
+                .accept()
+                .await
+                .unwrap()
+                .accept()
+                .unwrap()
+                .await
+                .unwrap();
             assert_eq!(connection_1.peer_id(), peer_id_1);
 
-            let connection_2 = endpoint_2.accept().await.unwrap().await.unwrap();
+            let connection_2 = endpoint_2
+                .accept()
+                .await
+                .unwrap()
+                .accept()
+                .unwrap()
+                .await
+                .unwrap();
             assert_eq!(connection_2.peer_id(), peer_id_1);
             assert_ne!(connection_1.stable_id(), connection_2.stable_id());
 
@@ -352,7 +427,16 @@ mod test {
 
         let (connection_1_to_2, connection_2_to_1) = timeout(join(
             async { endpoint_1.connect(addr_2).unwrap().await.unwrap() },
-            async { endpoint_2.accept().await.unwrap().await.unwrap() },
+            async {
+                endpoint_2
+                    .accept()
+                    .await
+                    .unwrap()
+                    .accept()
+                    .unwrap()
+                    .await
+                    .unwrap()
+            },
         ))
         .await
         .unwrap();

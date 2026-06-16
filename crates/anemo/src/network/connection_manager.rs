@@ -1,8 +1,9 @@
+use super::inbound_rate_limit::InboundIpRateLimiter;
 use super::request_handler::InboundRequestHandler;
 use crate::{
     config::Config,
     connection::Connection,
-    endpoint::{Connecting, Endpoint},
+    endpoint::{Connecting, Endpoint, Incoming},
     types::{Address, DisconnectReason, PeerAffinity, PeerEvent, PeerInfo},
     ConnectionOrigin, PeerId, Request, Response, Result,
 };
@@ -11,6 +12,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     convert::Infallible,
     sync::{Arc, RwLock},
+    time::Instant,
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
@@ -54,6 +56,10 @@ pub(crate) struct ConnectionManager {
     pending_dials: HashMap<PeerId, oneshot::Receiver<Result<PeerId>>>,
     dial_backoff_states: HashMap<PeerId, DialBackoffState>,
 
+    /// Per-source-IP rate limiter for admitting new inbound connections.
+    /// `None` when inbound rate limiting is disabled.
+    inbound_rate_limiter: Option<InboundIpRateLimiter>,
+
     active_peers: ActivePeers,
     known_peers: KnownPeers,
 
@@ -75,6 +81,9 @@ impl ConnectionManager {
         service: BoxCloneService<Request<Bytes>, Response<Bytes>, Infallible>,
     ) -> (Self, mpsc::Sender<ConnectionManagerRequest>) {
         let (sender, receiver) = mpsc::channel(config.connection_manager_channel_capacity());
+        let inbound_rate_limiter = config.inbound_connection_rate_limit_per_ip().map(|rate| {
+            InboundIpRateLimiter::new(rate, config.inbound_connection_rate_limit_burst_per_ip())
+        });
         (
             Self {
                 config,
@@ -84,6 +93,7 @@ impl ConnectionManager {
                 connection_handlers: JoinSet::new(),
                 pending_dials: HashMap::default(),
                 dial_backoff_states: HashMap::default(),
+                inbound_rate_limiter,
                 active_peers,
                 known_peers,
                 service,
@@ -142,9 +152,9 @@ impl ConnectionManager {
                         }
                     }
                 }
-                connecting = self.endpoint.accept() => {
-                    if let Some(connecting) = connecting {
-                        self.handle_incoming(connecting);
+                incoming = self.endpoint.accept() => {
+                    if let Some(incoming) = incoming {
+                        self.handle_incoming(incoming);
                     }
                 },
                 Some(connecting_output) = self.pending_connections.join_next() => {
@@ -229,15 +239,48 @@ impl ConnectionManager {
         self.dial_peer(address, peer_id, oneshot);
     }
 
-    fn handle_incoming(&mut self, connecting: Connecting) {
+    fn handle_incoming(&mut self, incoming: Incoming) {
         trace!("received new incoming connection");
 
-        self.pending_connections.spawn(Self::handle_incoming_task(
-            connecting,
-            self.config.clone(),
-            self.active_peers.clone(),
-            self.known_peers.clone(),
-        ));
+        let remote_address = incoming.remote_address();
+
+        // Validate source address, if enabled.
+        let incoming = if self.config.require_inbound_address_validation() {
+            match incoming.validate_source() {
+                Some(incoming) => incoming,
+                None => return,
+            }
+        } else {
+            incoming
+        };
+
+        // Apply per-source-IP inbound rate limit. Loopback sources are
+        // exempt: they can only originate on this host (a remote attacker cannot
+        // present a loopback source address), and exempting them avoids throttling
+        // local/test topologies where many peers share a loopback address.
+        if let Some(limiter) = self.inbound_rate_limiter.as_mut() {
+            let ip = remote_address.ip();
+            if !ip.is_loopback() && !limiter.check(ip, Instant::now()) {
+                debug!(%remote_address, "dropping inbound connection: per-source-IP rate limit exceeded");
+                incoming.ignore();
+                return;
+            }
+        }
+
+        // Admit the connection and begin the handshake.
+        match incoming.accept() {
+            Ok(connecting) => {
+                self.pending_connections.spawn(Self::handle_incoming_task(
+                    connecting,
+                    self.config.clone(),
+                    self.active_peers.clone(),
+                    self.known_peers.clone(),
+                ));
+            }
+            Err(e) => {
+                debug!(%remote_address, "failed to accept inbound connection: {e}");
+            }
+        }
     }
 
     async fn handle_incoming_task(
@@ -419,6 +462,11 @@ impl ConnectionManager {
             let address = peer.address.remove(idx);
             self.dial_peer(address, Some(peer.peer_id), sender);
             self.pending_dials.insert(peer.peer_id, receiver);
+        }
+
+        // Clean up rate limiter buckets.
+        if let Some(limiter) = self.inbound_rate_limiter.as_mut() {
+            limiter.evict_idle(now);
         }
     }
 

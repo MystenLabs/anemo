@@ -15,7 +15,7 @@ use tower::{
     util::{BoxLayer, BoxService},
     Layer, Service, ServiceBuilder, ServiceExt,
 };
-use tracing::warn;
+use tracing::{trace, warn};
 
 mod connection_manager;
 pub use connection_manager::KnownPeers;
@@ -269,6 +269,35 @@ impl Builder {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    /// The address was reachable and the server's identity matched the expected [`PeerId`].
+    Reachable,
+    /// A connection could not be established (e.g. no route, nothing listening).
+    Unreachable,
+    /// A connection was reached at the transport level but TLS verification failed — for a probe
+    /// with an explicit expected peer id, this means the server's identity did not match.
+    WrongIdentity,
+    /// The address could not be resolved or used to initiate a connection.
+    BadAddress,
+    /// The probe did not complete within the configured connect timeout.
+    Timeout,
+}
+
+impl ProbeOutcome {
+    /// Classify a failed probe connection. A transport/crypto-level failure means we reached an
+    /// endpoint speaking QUIC+TLS but verification failed; since a probe presents a valid client
+    /// cert and an explicit expected peer id, that indicates the server's identity did not match. A
+    /// timeout or any other connection error indicates the endpoint could not be reached.
+    fn from_connection_error(error: quinn::ConnectionError) -> Self {
+        match error {
+            quinn::ConnectionError::TimedOut => ProbeOutcome::Timeout,
+            quinn::ConnectionError::TransportError(_) => ProbeOutcome::WrongIdentity,
+            _ => ProbeOutcome::Unreachable,
+        }
+    }
+}
+
 /// Handle to a network.
 ///
 /// This handle can be cheaply cloned and shared across many threads.
@@ -320,6 +349,17 @@ impl Network {
         peer_id: PeerId,
     ) -> Result<PeerId> {
         self.0.connect(addr.into(), Some(peer_id)).await
+    }
+
+    /// Probe `addr` to verify it is reachable and that the server's cryptographic identity matches
+    /// `expected_peer_id`, without joining the peer set or disturbing any existing connection to
+    /// that peer.
+    pub async fn probe_address<A: Into<Address>>(
+        &self,
+        addr: A,
+        expected_peer_id: PeerId,
+    ) -> ProbeOutcome {
+        self.0.probe_address(addr.into(), expected_peer_id).await
     }
 
     pub fn disconnect(&self, peer: PeerId) -> Result<()> {
@@ -409,6 +449,40 @@ impl NetworkInner {
             .await
             .map_err(|_| anyhow!("network has been shutdown"))?;
         receiver.await?
+    }
+
+    async fn probe_address(&self, addr: Address, expected_peer_id: PeerId) -> ProbeOutcome {
+        let socket_addr = match addr.resolve().await {
+            Ok(socket_addr) => socket_addr,
+            Err(e) => {
+                trace!(?addr, "probe: failed to resolve address: {e}");
+                return ProbeOutcome::BadAddress;
+            }
+        };
+
+        let connecting = match self
+            .endpoint
+            .connect_for_probe(socket_addr, expected_peer_id)
+        {
+            Ok(connecting) => connecting,
+            Err(e) => {
+                trace!(%socket_addr, "probe: failed to initiate connection: {e}");
+                return ProbeOutcome::BadAddress;
+            }
+        };
+
+        match tokio::time::timeout(self.config.connect_timeout(), connecting).await {
+            // TLS completed, including verifying the server's identity against `expected_peer_id`.
+            Ok(Ok(connection)) => {
+                connection.close(0u32.into(), b"probe complete");
+                ProbeOutcome::Reachable
+            }
+            Ok(Err(e)) => {
+                trace!(%socket_addr, "probe: connection failed: {e}");
+                ProbeOutcome::from_connection_error(e)
+            }
+            Err(_) => ProbeOutcome::Timeout,
+        }
     }
 
     fn disconnect(&self, peer_id: PeerId) -> Result<()> {

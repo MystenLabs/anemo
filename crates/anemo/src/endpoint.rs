@@ -78,6 +78,22 @@ impl Endpoint {
             .map(Connecting::new_outbound)
     }
 
+    /// Open a probe connection that verifies `address` is reachable and the server's identity
+    /// matches `peer_id`, without admitting the result as a peer.
+    ///
+    /// Identity is enforced by the TLS verifier, so a successful connect means
+    /// the identity matched.
+    pub fn connect_for_probe(
+        &self,
+        address: SocketAddr,
+        peer_id: PeerId,
+    ) -> Result<quinn::Connecting> {
+        let config = self.config.client_config_for_probe(peer_id);
+        self.inner
+            .connect_with(config, address, crate::crypto::PROBE_SERVER_NAME)
+            .map_err(Into::into)
+    }
+
     /// Returns the socket address that this Endpoint is bound to.
     pub fn local_addr(&self) -> SocketAddr {
         *self.local_addr.read().unwrap()

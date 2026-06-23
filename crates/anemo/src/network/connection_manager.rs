@@ -303,6 +303,17 @@ impl ConnectionManager {
         let fut = async {
             let connection = connecting.await?;
 
+            // A probe connection only needs to verify reachability and our identity at the TLS
+            // layer, which has now completed. Decline to admit it as a peer.
+            if connection.server_name().as_deref() == Some(crate::crypto::PROBE_SERVER_NAME) {
+                trace!(
+                    peer_id = %connection.peer_id(),
+                    "closing completed probe connection"
+                );
+                connection.close();
+                return Err(anyhow::anyhow!("completed probe connection"));
+            }
+
             // TODO close the connection explicitly with a reason once we have machine
             // readable errors. See https://github.com/MystenLabs/anemo/issues/13 for more info.
             match known_peers.get(&connection.peer_id()) {

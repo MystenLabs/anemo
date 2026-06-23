@@ -1,4 +1,6 @@
-use crate::{types::PeerEvent, Config, Network, NetworkRef, Request, Response, Result};
+use crate::{
+    types::PeerEvent, Config, Network, NetworkRef, ProbeOutcome, Request, Response, Result,
+};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::FutureExt;
 use std::{convert::Infallible, time::Duration};
@@ -116,6 +118,109 @@ async fn connect_with_invalid_peer_id_ensure_server_doesnt_succeed() -> Result<(
         subscriber_2.recv().await,
         Err(tokio::sync::broadcast::error::RecvError::Closed),
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn probe_address_reachable_and_identity_match() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let prober = build_network()?;
+    let target = build_network()?;
+
+    let outcome = prober
+        .probe_address(target.local_addr(), target.peer_id())
+        .await;
+    assert_eq!(outcome, ProbeOutcome::Reachable);
+
+    // A probe must never join the peer set on either side.
+    assert!(prober.peers().is_empty());
+    assert!(target.peers().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn probe_address_identity_mismatch() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let prober = build_network()?;
+    let target = build_network()?;
+    let other = build_network()?;
+
+    // Probe the target's address but expect a different peer's identity.
+    let outcome = prober
+        .probe_address(target.local_addr(), other.peer_id())
+        .await;
+    assert_eq!(outcome, ProbeOutcome::WrongIdentity);
+
+    assert!(target.peers().is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn probe_address_unreachable() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    // Use a short connect timeout so the probe to a dead address returns promptly.
+    let prober = build_network_with_config(Config {
+        connect_timeout_ms: Some(300),
+        ..Default::default()
+    })?;
+
+    // A bound UDP socket that never speaks QUIC: packets are delivered and dropped, so the
+    // handshake never completes and the probe times out.
+    let dead_socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let dead_addr = dead_socket.local_addr().unwrap();
+
+    let outcome = prober.probe_address(dead_addr, prober.peer_id()).await;
+    assert_eq!(outcome, ProbeOutcome::Timeout);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn probe_does_not_disrupt_existing_connection() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let prober = build_network()?;
+    let target = build_network()?;
+
+    // Establish a production connection from the prober to the target.
+    let (mut target_events, _) = target.subscribe().unwrap();
+    let peer = prober.connect(target.local_addr()).await?;
+    assert_eq!(peer, target.peer_id());
+    assert_eq!(
+        target_events.recv().await,
+        Ok(PeerEvent::NewPeer(prober.peer_id()))
+    );
+
+    // Probe the target from the same node that already holds a connection to it. This is the case
+    // the probe SNI marker must make safe: were the probe admitted as a peer, `add_peer` would
+    // tie-break against the existing connection and could drop it.
+    let outcome = prober
+        .probe_address(target.local_addr(), target.peer_id())
+        .await;
+    assert_eq!(outcome, ProbeOutcome::Reachable);
+
+    // Give the target a chance to (incorrectly) process the probe as a peer.
+    tokio::task::yield_now().await;
+
+    // The production connection is intact: no LostPeer event, peer still present, RPC still works.
+    assert!(matches!(
+        target_events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
+    assert!(target.peers().contains(&prober.peer_id()));
+    assert!(prober.peers().contains(&target.peer_id()));
+
+    let msg = b"still here";
+    let response = prober
+        .rpc(target.peer_id(), Request::new(msg.as_ref().into()))
+        .await?;
+    assert_eq!(response.into_body(), msg.as_ref());
 
     Ok(())
 }

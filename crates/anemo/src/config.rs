@@ -1,5 +1,5 @@
 use crate::{
-    crypto::{CertVerifier, ExpectedCertVerifier},
+    crypto::{CertVerifier, ExpectedCertVerifier, PROBE_SERVER_NAME},
     PeerId, Result,
 };
 use pkcs8::EncodePrivateKey;
@@ -505,6 +505,12 @@ impl EndpointConfigBuilder {
             transport_config.clone(),
         )?;
 
+        // Always register a dedicated probe certificate/server-name in the cert resolver so any node
+        // can be probed (the client selects it via SNI). It is intentionally not added to the
+        // client-cert verifier: probing clients still authenticate with their primary certificate.
+        let (probe_certificate, _) = Self::generate_cert(&keypair, PROBE_SERVER_NAME);
+        let probe_cert_entry = (PROBE_SERVER_NAME.to_owned(), probe_certificate);
+
         let alternate_server_name = self.alternate_server_name;
         let server_config = match alternate_server_name {
             Some(alternate_server_name) => {
@@ -517,6 +523,7 @@ impl EndpointConfigBuilder {
                     vec![
                         (primary_server_name.clone(), primary_certificate.clone()),
                         (alternate_server_name, alternate_certificate),
+                        probe_cert_entry,
                     ],
                     pkcs8_der.clone_key(),
                     cert_verifier,
@@ -524,7 +531,10 @@ impl EndpointConfigBuilder {
                 )
             }
             _ => Self::server_config(
-                vec![(primary_server_name.clone(), primary_certificate.clone())],
+                vec![
+                    (primary_server_name.clone(), primary_certificate.clone()),
+                    probe_cert_entry,
+                ],
                 pkcs8_der.clone_key(),
                 cert_verifier,
                 transport_config.clone(),
@@ -661,23 +671,14 @@ impl EndpointConfig {
     // deprecated. Before that happens, we use the attribute to
     // keep clippy happy.
     #[allow(deprecated)]
-    pub fn client_config_with_expected_server_identity(
-        &self,
-        peer_id: PeerId,
-    ) -> quinn::ClientConfig {
-        let server_cert_verifier = ExpectedCertVerifier(
-            CertVerifier {
-                server_names: vec![self.server_name().into()],
-            },
-            peer_id,
-        );
+    fn client_config_with_verifier(&self, verifier: ExpectedCertVerifier) -> quinn::ClientConfig {
         let client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
         .with_safe_default_protocol_versions()
         .unwrap()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(server_cert_verifier))
+        .with_custom_certificate_verifier(Arc::new(verifier))
         .with_client_auth_cert(
             vec![self.client_certificate.clone()],
             self.pkcs8_der.clone_key(),
@@ -689,6 +690,30 @@ impl EndpointConfig {
         ));
         client.transport_config(self.transport_config.clone());
         client
+    }
+
+    pub fn client_config_with_expected_server_identity(
+        &self,
+        peer_id: PeerId,
+    ) -> quinn::ClientConfig {
+        self.client_config_with_verifier(ExpectedCertVerifier(
+            CertVerifier {
+                server_names: vec![self.server_name().into()],
+            },
+            peer_id,
+        ))
+    }
+
+    /// Client config for a probe connection: verifies the server's identity matches `peer_id` and
+    /// uses the dedicated probe server-name so the server can recognize and decline the probe (see
+    /// [`PROBE_SERVER_NAME`]). The probe must also pass `PROBE_SERVER_NAME` as the SNI when dialing.
+    pub fn client_config_for_probe(&self, peer_id: PeerId) -> quinn::ClientConfig {
+        self.client_config_with_verifier(ExpectedCertVerifier(
+            CertVerifier {
+                server_names: vec![PROBE_SERVER_NAME.into()],
+            },
+            peer_id,
+        ))
     }
 
     #[cfg(test)]

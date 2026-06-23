@@ -58,6 +58,15 @@ impl Connection {
         self.origin
     }
 
+    /// The TLS server-name (SNI) negotiated for this connection, if any.
+    pub fn server_name(&self) -> Option<String> {
+        let handshake_data = self.inner.handshake_data()?;
+        let handshake_data = handshake_data
+            .downcast::<quinn::crypto::rustls::HandshakeData>()
+            .ok()?;
+        handshake_data.server_name
+    }
+
     /// Time the Connection was established
     #[allow(unused)]
     pub fn time_established(&self) -> std::time::Instant {

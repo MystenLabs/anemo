@@ -20,6 +20,13 @@ static SUPPORTED_ALGORITHMS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgorith
     mapping: &[(rustls::SignatureScheme::ED25519, SUPPORTED_SIG_ALGS)],
 };
 
+/// Dedicated TLS server-name (SNI) used to mark probe connections.
+///
+/// A probe verifies that an address is reachable and that the server's cryptographic identity
+/// matches an expected [`PeerId`], at the TLS layer only. The dialing client selects this
+/// server-name before the handshake.
+pub(crate) const PROBE_SERVER_NAME: &str = "anemo-probe";
+
 #[derive(Clone, Debug)]
 pub(crate) struct CertVerifier {
     pub(crate) server_names: Vec<String>,

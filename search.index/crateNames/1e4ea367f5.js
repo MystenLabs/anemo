@@ -1,0 +1,1 @@
+rd_("eanemokanemo_buildianemo_clikanemo_towerhexamplesggreeterkgreeter_cli")

@@ -1,0 +1,67 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Set and propagate request ids."><title>anemo_tower::request_id - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="anemo_tower" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0 (ac68faa20 2026-05-25)" data-channel="1.96.0" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module request_id</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../anemo_tower/index.html">anemo_<wbr>tower</a><span class="version">0.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module request_<wbr>id</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li><li><a href="#using-trace" title="Using `Trace`">Using <code>Trace</code></a></li><li><a href="#doesnt-override-existing-headers" title="Doesn’t override existing headers">Doesn’t override existing headers</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate anemo_<wbr>tower</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">anemo_tower</a></div><h1>Module <span>request_<wbr>id</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/anemo_tower/request_id.rs.html#1-523">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Set and propagate request ids.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>anemo::{Request, Response};
+<span class="kw">use </span>tower::{Service, ServiceExt, ServiceBuilder};
+<span class="kw">use </span>anemo_tower::request_id::{
+    SetRequestIdLayer, PropagateRequestIdLayer, MakeRequestId, RequestId,
+};
+<span class="kw">use </span>bytes::Bytes;
+<span class="kw">use </span>std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+
+<span class="comment">// A `MakeRequestId` that increments an atomic counter
+</span><span class="attr">#[derive(Clone, Default)]
+</span><span class="kw">struct </span>MyMakeRequestId {
+    counter: Arc&lt;AtomicU64&gt;,
+}
+
+<span class="kw">impl </span>MakeRequestId <span class="kw">for </span>MyMakeRequestId {
+    <span class="kw">fn </span>make_request_id&lt;B&gt;(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: <span class="kw-2">&amp;</span>Request&lt;B&gt;) -&gt; <span class="prelude-ty">Option</span>&lt;RequestId&gt; {
+        <span class="kw">let </span>request_id = <span class="self">self</span>.counter
+            .fetch_add(<span class="number">1</span>, Ordering::SeqCst)
+            .to_string()
+            .parse()
+            .unwrap();
+
+        <span class="prelude-val">Some</span>(RequestId::new(request_id))
+    }
+}
+
+<span class="kw">let </span>request_id = <span class="string">"request-id"</span>.to_owned();
+
+<span class="kw">let </span><span class="kw-2">mut </span>svc = ServiceBuilder::new()
+    <span class="comment">// set `request-id` header on all requests
+    </span>.layer(SetRequestIdLayer::new(
+        request_id.clone(),
+        MyMakeRequestId::default(),
+    ))
+    <span class="comment">// propagate `request-id` headers from request to response
+    </span>.layer(PropagateRequestIdLayer::new(request_id))
+    .service(handler);
+
+<span class="kw">let </span>request = Request::new(Bytes::new());
+<span class="kw">let </span>response = svc.ready().<span class="kw">await</span><span class="question-mark">?</span>.call(request).<span class="kw">await</span><span class="question-mark">?</span>;
+
+<span class="macro">assert_eq!</span>(response.headers()[<span class="string">"request-id"</span>], <span class="string">"0"</span>);</code></pre></div><h2 id="using-trace"><a class="doc-anchor" href="#using-trace">§</a>Using <code>Trace</code></h2>
+<p>To have request ids show up correctly in logs produced by <a href="../trace/struct.Trace.html" title="struct anemo_tower::trace::Trace"><code>Trace</code></a> you must apply the layers
+in this order:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>anemo_tower::{
+    trace::{TraceLayer, DefaultMakeSpan, DefaultOnResponse},
+};
+
+<span class="kw">let </span>svc = ServiceBuilder::new()
+    <span class="comment">// make sure to set request ids before the request reaches `TraceLayer`
+    </span>.layer(SetRequestIdLayer::request_id(MyMakeRequestId::default()))
+    <span class="comment">// log requests and responses
+    </span>.layer(
+        TraceLayer::new_for_server_errors()
+            .make_span_with(DefaultMakeSpan::new().include_headers(<span class="bool-val">true</span>))
+            .on_response(DefaultOnResponse::new().include_headers(<span class="bool-val">true</span>))
+    )
+    <span class="comment">// propagate the header to the response before the response reaches `TraceLayer`
+    </span>.layer(PropagateRequestIdLayer::request_id())
+    .service(handler);</code></pre></div><h2 id="doesnt-override-existing-headers"><a class="doc-anchor" href="#doesnt-override-existing-headers">§</a>Doesn’t override existing headers</h2>
+<p><a href="struct.SetRequestId.html" title="struct anemo_tower::request_id::SetRequestId"><code>SetRequestId</code></a> and <a href="struct.PropagateRequestId.html" title="struct anemo_tower::request_id::PropagateRequestId"><code>PropagateRequestId</code></a> wont override request ids if its already present on
+requests or responses. Among other things, this allows other middleware to conditionally set
+request ids and use the middleware in this module as a fallback.</p>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.MakeRequestUuid.html" title="struct anemo_tower::request_id::MakeRequestUuid">Make<wbr>Request<wbr>Uuid</a></dt><dd>A <a href="trait.MakeRequestId.html" title="trait anemo_tower::request_id::MakeRequestId"><code>MakeRequestId</code></a> that generates <code>UUID</code>s.</dd><dt><a class="struct" href="struct.PropagateRequestId.html" title="struct anemo_tower::request_id::PropagateRequestId">Propagate<wbr>Request<wbr>Id</a></dt><dd>Propagate request ids from requests to responses.</dd><dt><a class="struct" href="struct.PropagateRequestIdLayer.html" title="struct anemo_tower::request_id::PropagateRequestIdLayer">Propagate<wbr>Request<wbr>IdLayer</a></dt><dd>Propagate request ids from requests to responses.</dd><dt><a class="struct" href="struct.PropagateRequestIdResponseFuture.html" title="struct anemo_tower::request_id::PropagateRequestIdResponseFuture">Propagate<wbr>Request<wbr>IdResponse<wbr>Future</a></dt><dd>Response future for <a href="struct.PropagateRequestId.html" title="struct anemo_tower::request_id::PropagateRequestId"><code>PropagateRequestId</code></a>.</dd><dt><a class="struct" href="struct.RequestId.html" title="struct anemo_tower::request_id::RequestId">Request<wbr>Id</a></dt><dd>An identifier for a request.</dd><dt><a class="struct" href="struct.SetRequestId.html" title="struct anemo_tower::request_id::SetRequestId">SetRequest<wbr>Id</a></dt><dd>Set request id headers and extensions on requests.</dd><dt><a class="struct" href="struct.SetRequestIdLayer.html" title="struct anemo_tower::request_id::SetRequestIdLayer">SetRequest<wbr>IdLayer</a></dt><dd>Set request id headers and extensions on requests.</dd></dl><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><dl class="item-table"><dt><a class="trait" href="trait.MakeRequestId.html" title="trait anemo_tower::request_id::MakeRequestId">Make<wbr>Request<wbr>Id</a></dt><dd>Trait for producing <a href="struct.RequestId.html" title="struct anemo_tower::request_id::RequestId"><code>RequestId</code></a>s.</dd></dl></section></div></main></body></html>

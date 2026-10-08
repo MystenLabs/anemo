@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["greeter_client","greeter_server"]};

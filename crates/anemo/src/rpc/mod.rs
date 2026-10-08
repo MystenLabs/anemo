@@ -150,6 +150,8 @@ pub mod client {
         }
 
         /// Send a single unary RPC request.
+        // Boxing `Status` would change the public signature.
+        #[allow(clippy::result_large_err)]
         pub async fn unary<M1, M2, C>(
             &mut self,
             request: Request<M1>,
@@ -256,6 +258,7 @@ pub mod server {
             self.map_response(response)
         }
 
+        #[allow(clippy::result_large_err)]
         async fn map_request(
             &mut self,
             request: Request<Bytes>,

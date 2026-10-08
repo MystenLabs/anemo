@@ -65,6 +65,8 @@ pub fn generate(service: &Service) -> TokenStream {
                 missing_docs,
                 // will trigger if compression is disabled
                 clippy::let_unit_value,
+                // generated methods return `anemo::rpc::Status` by value
+                clippy::result_large_err,
             )]
             use anemo::codegen::*;
             pub use anemo::codegen::InboundRequestLayer;

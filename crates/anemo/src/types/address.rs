@@ -17,9 +17,12 @@ impl Address {
     pub(crate) async fn resolve(&self) -> std::io::Result<std::net::SocketAddr> {
         let address = self.to_owned();
 
-        tokio::task::spawn_blocking(move || address.resolve_blocking())
-            .await
-            .unwrap()
+        match tokio::task::spawn_blocking(move || address.resolve_blocking()).await {
+            Ok(result) => result,
+            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+            // The runtime is shutting down, which cancels blocking tasks without running them.
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Interrupted, e)),
+        }
     }
 
     fn resolve_blocking(&self) -> std::io::Result<std::net::SocketAddr> {
@@ -135,5 +138,23 @@ impl From<String> for Address {
 impl From<Box<str>> for Address {
     fn from(addr: Box<str>) -> Self {
         Self::AddressString(addr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Address;
+
+    #[test]
+    fn resolve_after_runtime_shutdown_returns_error() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let handle = runtime.handle().clone();
+        runtime.shutdown_background();
+
+        let address = Address::from("127.0.0.1:8080");
+        let err = handle.block_on(address.resolve()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
     }
 }

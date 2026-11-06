@@ -135,6 +135,7 @@ impl Builder {
 
         let endpoint_config = EndpointConfig::builder()
             .transport_config(config.transport_config())
+            .key_exchange(config.key_exchange.unwrap_or_default())
             .server_name(primary_server_name)
             .alternate_server_name(alternate_server_name)
             .private_key(private_key)

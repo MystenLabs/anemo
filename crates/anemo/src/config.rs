@@ -5,6 +5,7 @@ use crate::{
 use pkcs8::EncodePrivateKey;
 use quinn::VarInt;
 use rcgen::{CertificateParams, KeyPair};
+use rustls::client::danger::ServerCertVerifier;
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::PrivateKeyDer;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,12 @@ pub struct Config {
     /// Configuration for the underlying QUIC transport.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quic: Option<QuicConfig>,
+
+    /// Key-exchange groups to offer, see [`KeyExchange`].
+    ///
+    /// If unspecified, this will default to [`KeyExchange::Hybrid`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_exchange: Option<KeyExchange>,
 
     /// Size of the internal `ConnectionManager`s mailbox.
     ///
@@ -424,6 +431,33 @@ impl QuicConfig {
     }
 }
 
+/// Key-exchange groups offered in the TLS handshake.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum KeyExchange {
+    /// X25519MLKEM768 ahead of the classical groups. Peers without it fall back to X25519.
+    #[default]
+    Hybrid,
+    /// What anemo offered before: X25519, secp256r1, secp384r1. This is to roll back.
+    Classical,
+}
+
+/// The aws-lc-rs default groups change with rustls' `prefer-post-quantum` feature, so set ours.
+fn crypto_provider(key_exchange: KeyExchange) -> Arc<rustls::crypto::CryptoProvider> {
+    use rustls::crypto::aws_lc_rs::{default_provider, kx_group};
+
+    let mut groups = vec![kx_group::X25519, kx_group::SECP256R1, kx_group::SECP384R1];
+    match key_exchange {
+        KeyExchange::Hybrid => groups.insert(0, kx_group::X25519MLKEM768),
+        KeyExchange::Classical => {}
+    }
+
+    let mut provider = default_provider();
+    provider.kx_groups = groups;
+    Arc::new(provider)
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct EndpointConfigBuilder {
     /// Ed25519 Private Key
@@ -440,11 +474,18 @@ pub(crate) struct EndpointConfigBuilder {
     pub alternate_server_name: Option<String>,
 
     pub transport_config: Option<quinn::TransportConfig>,
+
+    pub key_exchange: Option<KeyExchange>,
 }
 
 impl EndpointConfigBuilder {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn key_exchange(mut self, key_exchange: KeyExchange) -> Self {
+        self.key_exchange = Some(key_exchange);
+        self
     }
 
     pub fn server_name<T: Into<String>>(mut self, server_name: T) -> Self {
@@ -479,8 +520,6 @@ impl EndpointConfigBuilder {
     pub fn build(self) -> Result<EndpointConfig> {
         let keypair = ed25519::KeypairBytes {
             secret_key: self.private_key.unwrap(),
-            // ring cannot handle the optional public key that would be legal der here
-            // that is, ring expects PKCS#8 v.1
             public_key: None,
         };
 
@@ -490,6 +529,7 @@ impl EndpointConfigBuilder {
 
         let primary_server_name = self.server_name.unwrap();
         let transport_config = Arc::new(self.transport_config.unwrap_or_default());
+        let crypto_provider = crypto_provider(self.key_exchange.unwrap_or_default());
 
         let cert_verifier = Arc::new(CertVerifier {
             server_names: vec![primary_server_name.clone()],
@@ -503,6 +543,7 @@ impl EndpointConfigBuilder {
             pkcs8_der.clone_key(),
             cert_verifier.clone(),
             transport_config.clone(),
+            crypto_provider.clone(),
         )?;
 
         // Always register a dedicated probe certificate/server-name in the cert resolver so any node
@@ -528,6 +569,7 @@ impl EndpointConfigBuilder {
                     pkcs8_der.clone_key(),
                     cert_verifier,
                     transport_config.clone(),
+                    crypto_provider.clone(),
                 )
             }
             _ => Self::server_config(
@@ -538,6 +580,7 @@ impl EndpointConfigBuilder {
                 pkcs8_der.clone_key(),
                 cert_verifier,
                 transport_config.clone(),
+                crypto_provider.clone(),
             ),
         }?;
 
@@ -547,6 +590,7 @@ impl EndpointConfigBuilder {
             peer_id,
             client_certificate: primary_certificate,
             pkcs8_der,
+            crypto_provider,
             quinn_server_config: server_config,
             quinn_client_config: client_config,
             server_name: primary_server_name,
@@ -572,26 +616,36 @@ impl EndpointConfigBuilder {
         (certificate_der, key_der)
     }
 
-    fn server_config(
+    fn server_crypto(
         certs: Vec<(String, CertificateDer<'static>)>,
         pkcs8_der: PrivateKeyDer<'static>,
         cert_verifier: Arc<CertVerifier>,
-        transport_config: Arc<quinn::TransportConfig>,
-    ) -> Result<quinn::ServerConfig> {
+        crypto_provider: Arc<rustls::crypto::CryptoProvider>,
+    ) -> Result<rustls::ServerConfig> {
         let mut server_cert_resolver = rustls::server::ResolvesServerCertUsingSni::new();
-        let key = rustls::crypto::ring::sign::any_supported_type(&pkcs8_der)
+        let key = crypto_provider
+            .key_provider
+            .load_private_key(pkcs8_der)
             .map_err(|_| anyhow::anyhow!("invalid private key"))?;
         for (server_name, cert) in certs {
             let certified_key = rustls::sign::CertifiedKey::new(vec![cert], key.clone());
             server_cert_resolver.add(&server_name, certified_key)?;
         }
 
-        let server_crypto = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_client_cert_verifier(cert_verifier)
-        .with_cert_resolver(Arc::new(server_cert_resolver));
+        Ok(rustls::ServerConfig::builder_with_provider(crypto_provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])?
+            .with_client_cert_verifier(cert_verifier)
+            .with_cert_resolver(Arc::new(server_cert_resolver)))
+    }
+
+    fn server_config(
+        certs: Vec<(String, CertificateDer<'static>)>,
+        pkcs8_der: PrivateKeyDer<'static>,
+        cert_verifier: Arc<CertVerifier>,
+        transport_config: Arc<quinn::TransportConfig>,
+        crypto_provider: Arc<rustls::crypto::CryptoProvider>,
+    ) -> Result<quinn::ServerConfig> {
+        let server_crypto = Self::server_crypto(certs, pkcs8_der, cert_verifier, crypto_provider)?;
 
         let mut server = quinn::ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto).unwrap(),
@@ -600,20 +654,27 @@ impl EndpointConfigBuilder {
         Ok(server)
     }
 
-    #[allow(deprecated)]
+    fn client_crypto(
+        cert: CertificateDer<'static>,
+        pkcs8_der: PrivateKeyDer<'static>,
+        cert_verifier: Arc<dyn ServerCertVerifier>,
+        crypto_provider: Arc<rustls::crypto::CryptoProvider>,
+    ) -> Result<rustls::ClientConfig> {
+        Ok(rustls::ClientConfig::builder_with_provider(crypto_provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])?
+            .dangerous()
+            .with_custom_certificate_verifier(cert_verifier)
+            .with_client_auth_cert(vec![cert], pkcs8_der)?)
+    }
+
     fn client_config(
         cert: CertificateDer<'static>,
         pkcs8_der: PrivateKeyDer<'static>,
         cert_verifier: Arc<CertVerifier>,
         transport_config: Arc<quinn::TransportConfig>,
+        crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     ) -> Result<quinn::ClientConfig> {
-        let client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .dangerous()
-        .with_custom_certificate_verifier(cert_verifier)
-        .with_client_auth_cert(vec![cert], pkcs8_der)?;
+        let client_crypto = Self::client_crypto(cert, pkcs8_der, cert_verifier, crypto_provider)?;
 
         let mut client = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap(),
@@ -629,6 +690,7 @@ pub(crate) struct EndpointConfig {
     // Store client certificate for outbound connections initiation
     client_certificate: CertificateDer<'static>,
     pkcs8_der: PrivateKeyDer<'static>,
+    crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     quinn_server_config: quinn::ServerConfig,
     quinn_client_config: quinn::ClientConfig,
 
@@ -666,22 +728,12 @@ impl EndpointConfig {
         &self.quinn_client_config
     }
 
-    // TODO: remove #[allow(deprecated)] once we upgrade rustls
-    // to 0.21.4 or above, where `with_single_cert` is marked as
-    // deprecated. Before that happens, we use the attribute to
-    // keep clippy happy.
-    #[allow(deprecated)]
     fn client_config_with_verifier(&self, verifier: ExpectedCertVerifier) -> quinn::ClientConfig {
-        let client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_client_auth_cert(
-            vec![self.client_certificate.clone()],
+        let client_crypto = EndpointConfigBuilder::client_crypto(
+            self.client_certificate.clone(),
             self.pkcs8_der.clone_key(),
+            Arc::new(verifier),
+            self.crypto_provider.clone(),
         )
         .unwrap();
 
@@ -723,5 +775,176 @@ impl EndpointConfig {
             .server_name(server_name)
             .build()
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::crypto::CryptoProvider;
+    use rustls::pki_types::ServerName;
+    use rustls::{HandshakeKind, NamedGroup};
+    use KeyExchange::{Classical, Hybrid};
+
+    const SERVER_NAME: &str = "test";
+
+    fn random_keypair() -> ed25519::KeypairBytes {
+        let mut secret_key = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut secret_key);
+        ed25519::KeypairBytes {
+            secret_key,
+            public_key: None,
+        }
+    }
+
+    fn verifier() -> Arc<CertVerifier> {
+        Arc::new(CertVerifier {
+            server_names: vec![SERVER_NAME.to_owned()],
+        })
+    }
+
+    fn client_tls(provider: Arc<CryptoProvider>) -> Arc<rustls::ClientConfig> {
+        let (cert, key) = EndpointConfigBuilder::generate_cert(&random_keypair(), SERVER_NAME);
+        Arc::new(EndpointConfigBuilder::client_crypto(cert, key, verifier(), provider).unwrap())
+    }
+
+    fn server_tls(provider: Arc<CryptoProvider>) -> Arc<rustls::ServerConfig> {
+        let (cert, key) = EndpointConfigBuilder::generate_cert(&random_keypair(), SERVER_NAME);
+        let certs = vec![(SERVER_NAME.to_owned(), cert)];
+        Arc::new(EndpointConfigBuilder::server_crypto(certs, key, verifier(), provider).unwrap())
+    }
+
+    /// quinn has no public API for the negotiated group, so drive rustls directly.
+    fn handshake(
+        client: &Arc<rustls::ClientConfig>,
+        server: &Arc<rustls::ServerConfig>,
+    ) -> (NamedGroup, HandshakeKind) {
+        let name = ServerName::try_from(SERVER_NAME).unwrap();
+        let mut client = rustls::ClientConnection::new(client.clone(), name).unwrap();
+        let mut server = rustls::ServerConnection::new(server.clone()).unwrap();
+
+        // Three round trips cover a HelloRetryRequest, and the extra ones deliver the tickets.
+        let mut buf = Vec::new();
+        for _ in 0..5 {
+            buf.clear();
+            client.write_tls(&mut buf).unwrap();
+            let mut pending = buf.as_slice();
+            while !pending.is_empty() {
+                server.read_tls(&mut pending).unwrap();
+                server.process_new_packets().unwrap();
+            }
+
+            buf.clear();
+            server.write_tls(&mut buf).unwrap();
+            let mut pending = buf.as_slice();
+            while !pending.is_empty() {
+                client.read_tls(&mut pending).unwrap();
+                client.process_new_packets().unwrap();
+            }
+        }
+        assert!(!client.is_handshaking() && !server.is_handshaking());
+
+        let group = client.negotiated_key_exchange_group().unwrap().name();
+        assert_eq!(
+            group,
+            server.negotiated_key_exchange_group().unwrap().name()
+        );
+        (group, client.handshake_kind().unwrap())
+    }
+
+    fn negotiated_group(client: KeyExchange, server: KeyExchange) -> NamedGroup {
+        let client = client_tls(crypto_provider(client));
+        handshake(&client, &server_tls(crypto_provider(server))).0
+    }
+
+    #[test]
+    fn classical_offers_what_anemo_offered_before() {
+        let groups = |key_exchange| -> Vec<NamedGroup> {
+            let provider = crypto_provider(key_exchange);
+            provider.kx_groups.iter().map(|g| g.name()).collect()
+        };
+        let before = [
+            NamedGroup::X25519,
+            NamedGroup::secp256r1,
+            NamedGroup::secp384r1,
+        ];
+
+        assert_eq!(groups(Classical), before);
+        assert_eq!(groups(Hybrid)[0], NamedGroup::X25519MLKEM768);
+        assert_eq!(groups(Hybrid)[1..], before);
+    }
+
+    #[test]
+    fn hybrid_peers_negotiate_x25519mlkem768() {
+        assert_eq!(negotiated_group(Hybrid, Hybrid), NamedGroup::X25519MLKEM768);
+    }
+
+    #[test]
+    fn classical_peer_negotiates_x25519_in_either_direction() {
+        for (client, server) in [
+            (Hybrid, Classical),
+            (Classical, Hybrid),
+            (Classical, Classical),
+        ] {
+            assert_eq!(negotiated_group(client, server), NamedGroup::X25519);
+        }
+    }
+
+    /// rustls remembers the last group per server name, and every peer of a network shares one.
+    #[test]
+    fn stale_x25519_hint_costs_a_retry_but_ends_on_hybrid() {
+        let client = client_tls(crypto_provider(Hybrid));
+
+        let classical = server_tls(crypto_provider(Classical));
+        assert_eq!(
+            handshake(&client, &classical),
+            (NamedGroup::X25519, HandshakeKind::Full)
+        );
+
+        let hybrid = server_tls(crypto_provider(Hybrid));
+        assert_eq!(
+            handshake(&client, &hybrid),
+            (
+                NamedGroup::X25519MLKEM768,
+                HandshakeKind::FullWithHelloRetryRequest
+            )
+        );
+    }
+
+    #[test]
+    fn resumed_session_runs_the_hybrid_exchange_again() {
+        let client = client_tls(crypto_provider(Hybrid));
+        let server = server_tls(crypto_provider(Hybrid));
+
+        assert_eq!(
+            handshake(&client, &server),
+            (NamedGroup::X25519MLKEM768, HandshakeKind::Full)
+        );
+        assert_eq!(
+            handshake(&client, &server),
+            (NamedGroup::X25519MLKEM768, HandshakeKind::Resumed)
+        );
+
+        // No 0-RTT, so nothing is ever sent under resumption keys alone.
+        assert!(!client.enable_early_data);
+        assert_eq!(server.max_early_data_size, 0);
+    }
+
+    /// The PeerId is the Ed25519 public key, whatever backend builds the certificate.
+    #[test]
+    fn peer_id_for_a_fixed_key() {
+        let keypair = ed25519::KeypairBytes {
+            secret_key: [7; 32],
+            public_key: None,
+        };
+
+        for name in [SERVER_NAME, PROBE_SERVER_NAME] {
+            let (cert, _) = EndpointConfigBuilder::generate_cert(&keypair, name);
+            let peer_id = crate::crypto::peer_id_from_certificate(&cert).unwrap();
+            assert_eq!(
+                hex::encode(peer_id.0),
+                "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
+            );
+        }
     }
 }

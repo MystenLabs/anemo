@@ -1,5 +1,6 @@
 use crate::{
-    types::PeerEvent, Config, Network, NetworkRef, ProbeOutcome, Request, Response, Result,
+    types::PeerEvent, Config, KeyExchange, Network, NetworkRef, ProbeOutcome, Request, Response,
+    Result,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::FutureExt;
@@ -1071,6 +1072,102 @@ async fn max_frame_size_falls_back_for_both_directions() -> Result<()> {
         .rpc(peer, Request::new(big.into()))
         .await
         .unwrap_err();
+
+    Ok(())
+}
+
+/// A hybrid ClientHello takes two Initial packets, so Retry sees a split first flight here too.
+#[tokio::test]
+async fn hybrid_and_classical_key_exchange_interoperate() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let build = |key_exchange| {
+        build_network_with_config(Config {
+            key_exchange: Some(key_exchange),
+            ..Default::default()
+        })
+    };
+    let msg = b"Oathbringer";
+
+    for (dialer, listener) in [
+        (KeyExchange::Hybrid, KeyExchange::Hybrid),
+        (KeyExchange::Hybrid, KeyExchange::Classical),
+        (KeyExchange::Classical, KeyExchange::Hybrid),
+    ] {
+        let dialer = build(dialer)?;
+        let listener = build(listener)?;
+
+        let peer = dialer
+            .connect_with_peer_id(listener.local_addr(), listener.peer_id())
+            .await?;
+        let response = dialer.rpc(peer, Request::new(msg.as_ref().into())).await?;
+        assert_eq!(response.into_body(), msg.as_ref());
+    }
+
+    Ok(())
+}
+
+/// An unpinned dial reuses the last peer's group, so the second dial takes a HelloRetryRequest.
+#[tokio::test]
+async fn hybrid_dialer_reaches_a_hybrid_peer_after_a_classical_one() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let build = |key_exchange| {
+        build_network_with_config(Config {
+            key_exchange: Some(key_exchange),
+            ..Default::default()
+        })
+    };
+    let msg = b"Oathbringer";
+
+    let dialer = build(KeyExchange::Hybrid)?;
+    for listener in [KeyExchange::Classical, KeyExchange::Hybrid] {
+        let listener = build(listener)?;
+
+        let peer = dialer.connect(listener.local_addr()).await?;
+        let response = dialer.rpc(peer, Request::new(msg.as_ref().into())).await?;
+        assert_eq!(response.into_body(), msg.as_ref());
+    }
+
+    Ok(())
+}
+
+/// A dual-stack listener sees an IPv4 loopback dialer as `::ffff:127.0.0.1`, which the limiter
+/// does not exempt, so this takes the two-packet ClientHello through it. It checks token
+/// accounting only, not loss or path MTU.
+#[cfg(any(target_os = "linux", target_os = "macos"))] // `[::]` is dual-stack by default here
+#[tokio::test]
+async fn hybrid_dial_costs_one_rate_limit_token() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let build = |addr: &str| {
+        Network::bind(addr)
+            .random_private_key()
+            .server_name("test")
+            .config(Config {
+                key_exchange: Some(KeyExchange::Hybrid),
+                inbound_connection_rate_limit_per_ip: Some(1),
+                inbound_connection_rate_limit_burst_per_ip: Some(2),
+                ..Default::default()
+            })
+            .start(echo_service())
+    };
+    // No IPv6 on this host.
+    let Ok(listener) = build("[::]:0") else {
+        return Ok(());
+    };
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], listener.local_addr().port()));
+    let dial = || async {
+        let dialer = build("127.0.0.1:0")?;
+        let connect = dialer.connect_with_peer_id(addr, listener.peer_id());
+        Ok::<_, crate::Error>(tokio::time::timeout(Duration::from_millis(500), connect).await)
+    };
+
+    // Two tokens pay for two dials. If each Initial packet took one, the second would stall.
+    assert!(matches!(dial().await?, Ok(Ok(_))));
+    assert!(matches!(dial().await?, Ok(Ok(_))));
+    // The bucket is empty now, so the limiter did not treat this dialer as loopback.
+    assert!(dial().await?.is_err());
 
     Ok(())
 }

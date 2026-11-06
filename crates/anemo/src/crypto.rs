@@ -1,6 +1,7 @@
 use crate::{error::AsStdError, PeerId};
 
 use anyhow::anyhow;
+use quinn::crypto::{CryptoError, HmacKey};
 use rustls::client::danger::ServerCertVerified;
 use rustls::client::danger::ServerCertVerifier;
 use rustls::crypto::WebPkiSupportedAlgorithms;
@@ -13,7 +14,7 @@ use rustls::server::danger::ClientCertVerified;
 use rustls::server::danger::ClientCertVerifier;
 use std::sync::Arc;
 
-static SUPPORTED_SIG_ALGS: &[&dyn SignatureVerificationAlgorithm] = &[webpki::ring::ED25519];
+static SUPPORTED_SIG_ALGS: &[&dyn SignatureVerificationAlgorithm] = &[webpki::aws_lc_rs::ED25519];
 
 static SUPPORTED_ALGORITHMS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgorithms {
     all: SUPPORTED_SIG_ALGS,
@@ -370,17 +371,68 @@ pub(crate) fn peer_id_from_certificate(
     Ok(peer_id)
 }
 
+/// quinn-proto only implements [`HmacKey`] for ring's key if both backends are on, so wrap ours.
+pub(crate) struct ResetKey(aws_lc_rs::hmac::Key);
+
+impl HmacKey for ResetKey {
+    fn sign(&self, data: &[u8], out: &mut [u8]) {
+        // quinn passes a buffer of `signature_len()` bytes.
+        out.copy_from_slice(aws_lc_rs::hmac::sign(&self.0, data).as_ref());
+    }
+
+    fn signature_len(&self) -> usize {
+        32
+    }
+
+    fn verify(&self, data: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
+        aws_lc_rs::hmac::verify(&self.0, data, signature).map_err(|_| CryptoError)
+    }
+}
+
 /// Perform a HKDF with the provided ed25519 private key in order to generate a consistent reset
 /// key used for quic stateless connection resets.
-pub(crate) fn construct_reset_key(private_key: &[u8; 32]) -> ring::hmac::Key {
+pub(crate) fn construct_reset_key(private_key: &[u8; 32]) -> ResetKey {
     const STATELESS_RESET_SALT: &[u8] = b"anemo-stateless-reset";
 
-    let salt = ring::hkdf::Salt::new(ring::hkdf::HKDF_SHA256, STATELESS_RESET_SALT);
+    let salt = aws_lc_rs::hkdf::Salt::new(aws_lc_rs::hkdf::HKDF_SHA256, STATELESS_RESET_SALT);
     let prk = salt.extract(private_key);
-    let okm = prk.expand(&[], ring::hmac::HMAC_SHA256).unwrap();
+    let okm = prk.expand(&[], aws_lc_rs::hmac::HMAC_SHA256).unwrap();
 
     let mut reset_key = [0; 32];
     okm.fill(&mut reset_key).unwrap();
 
-    ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &reset_key)
+    ResetKey(aws_lc_rs::hmac::Key::new(
+        aws_lc_rs::hmac::HMAC_SHA256,
+        &reset_key,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Peers keep reset tokens across our restarts, so these can't change between releases.
+    #[test]
+    fn reset_key_is_stable() {
+        let key = construct_reset_key(&[7; 32]);
+
+        for (connection_id, expected) in [
+            (
+                &b"some connection id"[..],
+                "b953ba6912865c2decca681d99c65706b037d7a15aad06816561025b69d11924",
+            ),
+            (
+                &[0, 1, 2, 3, 4, 5, 6, 7][..],
+                "a6b003d51cb5cdff0c34f9b9cfde1b74a5f32d5ca4ee86db67cb1fa986fd8592",
+            ),
+        ] {
+            let mut token = vec![0; key.signature_len()];
+            key.sign(connection_id, &mut token);
+            assert_eq!(hex::encode(&token), expected);
+
+            assert!(key.verify(connection_id, &token).is_ok());
+            token[0] ^= 1;
+            assert!(key.verify(connection_id, &token).is_err());
+        }
+    }
 }

@@ -9,7 +9,7 @@ mod routing;
 pub mod rpc;
 pub mod types;
 
-pub use config::{Config, QuicConfig};
+pub use config::{Config, KeyExchange, QuicConfig};
 pub use error::{Error, Result};
 pub use network::{Builder, KnownPeers, Network, NetworkRef, Peer, ProbeOutcome};
 pub use routing::{Router, ServicesOpen, ServicesSealed};

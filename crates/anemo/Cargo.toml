@@ -17,19 +17,19 @@ http = "1"
 matchit = "0.5.0"
 pin-project-lite = "0.2.9"
 pkcs8 = { version = "0.10.0", features = ["std"] }
-quinn = { version = "0.11.2", default-features = false, features = ["runtime-tokio", "rustls", "futures-io"] }
-quinn-proto = { version = "0.11.0", default-features = false, features = ["rustls"] }
+quinn = { version = "0.11.6", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs", "futures-io"] }
+quinn-proto = { version = "0.11.14", default-features = false, features = ["rustls-aws-lc-rs"] }
 rand = "0.8.5"
-ring = "0.17"
-rcgen = "0.13"
-rustls = { version = "0.23.0", default-features = false, features = ["std", "ring"] }
+aws-lc-rs = "1"
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs"] }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "aws-lc-rs"] }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.83"
 tokio = { version = "1.17.0", features = ["sync", "rt", "macros", "io-util"] }
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tower = { version = "0.4.12", default-features = false, features = ["full"] }
 tracing = "0.1.32"
-webpki = { version = "0.103.0", package = "rustls-webpki", features = ["alloc", "std", "ring"] }
+webpki = { version = "0.103.0", package = "rustls-webpki", features = ["alloc", "std", "aws-lc-rs"] }
 x509-parser = "0.17.0"
 hex = "0.4.3"
 tap = "1.0.1"

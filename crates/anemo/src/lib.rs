@@ -9,12 +9,15 @@ mod routing;
 pub mod rpc;
 pub mod types;
 
-pub use config::{Config, KeyExchange, QuicConfig};
+pub use config::{Authentication, Config, KeyExchange, QuicConfig};
 pub use error::{Error, Result};
 pub use network::{Builder, KnownPeers, Network, NetworkRef, Peer, ProbeOutcome};
 pub use routing::{Router, ServicesOpen, ServicesSealed};
 #[doc(inline)]
-pub use types::{request::Request, response::Response, ConnectionOrigin, Direction, PeerId};
+pub use types::{
+    request::Request, response::Response, ConnectionOrigin, Direction, PeerId, PqPrivateKey,
+    PqPublicKey,
+};
 
 pub use async_trait::async_trait;
 

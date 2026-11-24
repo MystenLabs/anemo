@@ -1,9 +1,10 @@
 use crate::{
     config::EndpointConfig,
+    connection::Connection,
     endpoint::Endpoint,
     middleware::{add_extension::AddExtensionLayer, timeout},
     types::{Address, DisconnectReason, PeerEvent},
-    Config, PeerId, Request, Response, Result,
+    Config, ConnectionOrigin, PeerId, PqPrivateKey, Request, Response, Result,
 };
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -50,6 +51,9 @@ pub struct Builder {
     /// Ed25519 Private Key
     private_key: Option<[u8; 32]>,
 
+    /// Post-quantum Private Key
+    pq_private_key: Option<PqPrivateKey>,
+
     /// Layer to apply to all outbound requests
     outbound_request_layer: Option<OutboundRequestLayer>,
 }
@@ -86,6 +90,19 @@ impl Builder {
     /// The corresponding Public Key will be this node's [`PeerId`].
     pub fn private_key(mut self, private_key: [u8; 32]) -> Self {
         self.private_key = Some(private_key);
+        self
+    }
+
+    /// Set the post-quantum Private Key, which is separate from the Ed25519 one. With it the node
+    /// also authenticates with that key, and peers that recorded its
+    /// [public key](PqPrivateKey::public_key) accept nothing else from it. Optional.
+    ///
+    /// Guard it like the Ed25519 key. The Ed25519 signature that ties the two keys together is
+    /// public and does not expire, so this key alone is enough to connect as this node to peers
+    /// that take post-quantum certificates. A peer stops taking a leaked key only once it has
+    /// another one on record for this node.
+    pub fn pq_private_key(mut self, pq_private_key: PqPrivateKey) -> Self {
+        self.pq_private_key = Some(pq_private_key);
         self
     }
 
@@ -136,9 +153,11 @@ impl Builder {
         let endpoint_config = EndpointConfig::builder()
             .transport_config(config.transport_config())
             .key_exchange(config.key_exchange.unwrap_or_default())
+            .authentication(config.authentication.unwrap_or_default())
             .server_name(primary_server_name)
             .alternate_server_name(alternate_server_name)
             .private_key(private_key)
+            .pq_private_key(self.pq_private_key)
             .build()?;
 
         let addrs: Vec<_> = self.bind_address.to_socket_addrs()?.collect();
@@ -315,6 +334,7 @@ impl Network {
             server_name: None,
             alternate_server_name: None,
             private_key: None,
+            pq_private_key: None,
             outbound_request_layer: None,
         }
     }
@@ -475,8 +495,20 @@ impl NetworkInner {
         match tokio::time::timeout(self.config.connect_timeout(), connecting).await {
             // TLS completed, including verifying the server's identity against `expected_peer_id`.
             Ok(Ok(connection)) => {
+                // Same rule as for a peer we connect to: a recorded key has to be shown.
+                let checked = Connection::new(connection.clone(), ConnectionOrigin::Outbound)
+                    .and_then(|peer| {
+                        self.known_peers
+                            .check_pq_public_key(&peer.peer_id(), peer.pq_public_key())
+                    });
                 connection.close(0u32.into(), b"probe complete");
-                ProbeOutcome::Reachable
+                match checked {
+                    Ok(()) => ProbeOutcome::Reachable,
+                    Err(e) => {
+                        trace!(%socket_addr, "probe: {e}");
+                        ProbeOutcome::WrongIdentity
+                    }
+                }
             }
             Ok(Err(e)) => {
                 trace!(%socket_addr, "probe: connection failed: {e}");

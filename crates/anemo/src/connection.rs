@@ -1,4 +1,4 @@
-use crate::{ConnectionOrigin, PeerId, Result};
+use crate::{ConnectionOrigin, PeerId, PqPublicKey, Result};
 use quinn::{ConnectionError, RecvStream};
 use quinn_proto::ConnectionStats;
 use rustls::pki_types::CertificateDer;
@@ -15,6 +15,8 @@ use tracing::trace;
 pub(crate) struct Connection {
     inner: quinn::Connection,
     peer_id: PeerId,
+    // Post-quantum key the peer authenticated with, None if it showed its Ed25519 cert
+    pq_public_key: Option<PqPublicKey>,
     origin: ConnectionOrigin,
 
     // Time that the connection was established
@@ -23,17 +25,18 @@ pub(crate) struct Connection {
 
 impl Connection {
     pub fn new(inner: quinn::Connection, origin: ConnectionOrigin) -> Result<Self> {
-        let peer_id = Self::try_peer_id(&inner)?;
+        let (peer_id, pq_public_key) = Self::try_peer_identity(&inner)?;
         Ok(Self {
             inner,
             peer_id,
+            pq_public_key,
             origin,
             time_established: std::time::Instant::now(),
         })
     }
 
     /// Try to query Cryptographic identity of the peer
-    fn try_peer_id(connection: &quinn::Connection) -> Result<PeerId> {
+    fn try_peer_identity(connection: &quinn::Connection) -> Result<(PeerId, Option<PqPublicKey>)> {
         // Query the certificate chain provided by a [TLS
         // Connection](https://docs.rs/rustls/0.20.4/rustls/enum.Connection.html#method.peer_certificates).
         // The first cert in the chain is guaranteed to be the peer
@@ -43,14 +46,19 @@ impl Connection {
             .downcast::<Vec<CertificateDer>>()
             .unwrap()[0];
 
-        let peer_id = crate::crypto::peer_id_from_certificate(peer_cert)?;
+        let peer_identity = crate::crypto::peer_identity_from_certificate(peer_cert)?;
 
-        Ok(peer_id)
+        Ok(peer_identity)
     }
 
     /// PeerId of the Remote Peer
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+
+    /// Post-quantum public key the Remote Peer authenticated with, if any
+    pub fn pq_public_key(&self) -> Option<&PqPublicKey> {
+        self.pq_public_key.as_ref()
     }
 
     /// Origin of the Connection

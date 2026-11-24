@@ -5,7 +5,7 @@ use crate::{
     connection::Connection,
     endpoint::{Connecting, Endpoint, Incoming},
     types::{Address, DisconnectReason, PeerAffinity, PeerEvent, PeerInfo},
-    ConnectionOrigin, PeerId, Request, Response, Result,
+    ConnectionOrigin, PeerId, PqPublicKey, Request, Response, Result,
 };
 use bytes::Bytes;
 use std::{
@@ -314,6 +314,8 @@ impl ConnectionManager {
                 return Err(anyhow::anyhow!("completed probe connection"));
             }
 
+            known_peers.check_pq_public_key(&connection.peer_id(), connection.pq_public_key())?;
+
             // TODO close the connection explicitly with a reason once we have machine
             // readable errors. See https://github.com/MystenLabs/anemo/issues/13 for more info.
             match known_peers.get(&connection.peer_id()) {
@@ -440,6 +442,17 @@ impl ConnectionManager {
                 Err(oneshot::error::TryRecvError::Empty) => true,
             });
 
+        // A key recorded after a connection was set up applies to that connection too.
+        for peer_id in self.active_peers.peers() {
+            let connection = self.active_peers.get(&peer_id);
+            let shown = connection.as_ref().and_then(Connection::pq_public_key);
+            if let Err(e) = self.known_peers.check_pq_public_key(&peer_id, shown) {
+                debug!("dropping connection: {e}");
+                self.active_peers
+                    .remove(&peer_id, DisconnectReason::Requested);
+            }
+        }
+
         let eligible: Vec<_> = {
             let active_peers = self.active_peers.inner();
             let known_peers = self.known_peers.inner();
@@ -505,6 +518,7 @@ impl ConnectionManager {
             peer_id,
             oneshot,
             self.config.clone(),
+            self.known_peers.clone(),
         ));
     }
 
@@ -515,6 +529,7 @@ impl ConnectionManager {
         peer_id: Option<PeerId>,
         oneshot: oneshot::Sender<Result<PeerId>>,
         config: Arc<Config>,
+        known_peers: KnownPeers,
     ) -> ConnectingOutput {
         let fut = async {
             let socket_addr = target_address.resolve().await?;
@@ -525,6 +540,8 @@ impl ConnectionManager {
                 endpoint.connect(socket_addr)
             }?
             .await?;
+
+            known_peers.check_pq_public_key(&connection.peer_id(), connection.pq_public_key())?;
 
             super::wire::handshake(connection).await
         };
@@ -809,6 +826,22 @@ impl KnownPeers {
         self.inner().values().cloned().collect()
     }
 
+    /// A peer with a recorded post-quantum key has to show that key. Its Ed25519 cert alone no
+    /// longer counts, or breaking Ed25519 would be enough to connect as that peer.
+    pub(crate) fn check_pq_public_key(
+        &self,
+        peer_id: &PeerId,
+        shown: Option<&PqPublicKey>,
+    ) -> Result<()> {
+        let recorded = self.get(peer_id).and_then(|info| info.pq_public_key);
+        if recorded.is_some() && recorded.as_ref() != shown {
+            return Err(anyhow::anyhow!(
+                "peer {peer_id} did not show its recorded post-quantum key"
+            ));
+        }
+        Ok(())
+    }
+
     pub fn insert(&self, peer_info: PeerInfo) -> Option<PeerInfo> {
         self.inner_mut().insert(peer_info.peer_id, peer_info)
     }
@@ -839,6 +872,30 @@ impl KnownPeers {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn recorded_pq_key_has_to_be_shown() {
+        let known_peers = KnownPeers::new();
+        let peer_id = PeerId([1; 32]);
+        let key = PqPublicKey::MlDsa44(Bytes::from_static(b"key"));
+        let other = PqPublicKey::MlDsa44(Bytes::from_static(b"other"));
+        let check = |shown| known_peers.check_pq_public_key(&peer_id, shown).is_ok();
+
+        // Nothing recorded, so either cert is fine.
+        assert!(check(None));
+        assert!(check(Some(&key)));
+
+        known_peers.insert(PeerInfo {
+            peer_id,
+            affinity: PeerAffinity::Allowed,
+            address: vec![],
+            pq_public_key: Some(key.clone()),
+        });
+        assert!(check(Some(&key)));
+        assert!(!check(Some(&other)));
+        // The peer showed its Ed25519 cert.
+        assert!(!check(None));
+    }
 
     #[test]
     fn backoff() {

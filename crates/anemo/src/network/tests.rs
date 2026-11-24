@@ -1,6 +1,6 @@
 use crate::{
-    types::PeerEvent, Config, KeyExchange, Network, NetworkRef, ProbeOutcome, Request, Response,
-    Result,
+    types::PeerEvent, Config, KeyExchange, Network, NetworkRef, PqPrivateKey, PqPublicKey,
+    ProbeOutcome, Request, Response, Result,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::FutureExt;
@@ -329,6 +329,7 @@ async fn reject_peer_with_affinity_never() -> Result<()> {
         peer_id: network_2.peer_id(),
         affinity: crate::types::PeerAffinity::Never,
         address: vec![],
+        pq_public_key: None,
     };
     network_1.known_peers().insert(peer_info_2);
 
@@ -357,6 +358,7 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
         peer_id: network_2.peer_id(),
         affinity: crate::types::PeerAffinity::Never,
         address: vec![],
+        pq_public_key: None,
     };
     network_1.known_peers().insert(peer_info_2);
     // Configure peer 3 with high affinity
@@ -364,6 +366,7 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
         peer_id: network_3.peer_id(),
         affinity: crate::types::PeerAffinity::High,
         address: vec![network_3.local_addr().into()],
+        pq_public_key: None,
     };
     network_1.known_peers().insert(peer_info_3);
     // Configure peer 4 with Allowed affinity
@@ -371,6 +374,7 @@ async fn peers_with_affinity_never_are_not_dialed_in_the_background() -> Result<
         peer_id: network_4.peer_id(),
         affinity: crate::types::PeerAffinity::Allowed,
         address: vec![network_4.local_addr().into()],
+        pq_public_key: None,
     };
     network_1.known_peers().insert(peer_info_4);
 
@@ -510,6 +514,7 @@ async fn basic_connectivity_check() -> Result<()> {
         peer_id: peer_id_2,
         affinity: crate::types::PeerAffinity::High,
         address: vec![network_2.local_addr().into()],
+        pq_public_key: None,
     };
     let mut subscriber_1 = network_1.subscribe()?.0;
     let mut subscriber_2 = network_2.subscribe()?.0;
@@ -553,12 +558,14 @@ async fn basic_connectivity_check_with_allowlist_affinity() -> Result<()> {
         peer_id: peer_id_2,
         affinity: crate::types::PeerAffinity::Allowed,
         address: vec![network_2.local_addr().into()],
+        pq_public_key: None,
     });
 
     network_2.known_peers().insert(crate::types::PeerInfo {
         peer_id: peer_id_1,
         affinity: crate::types::PeerAffinity::Allowed,
         address: vec![network_1.local_addr().into()],
+        pq_public_key: None,
     });
     // Peers shouldn't connect each other.
     let mut timeout = tokio::time::sleep(Duration::from_secs(5)).boxed();
@@ -574,6 +581,7 @@ async fn basic_connectivity_check_with_allowlist_affinity() -> Result<()> {
         peer_id: peer_id_2,
         affinity: crate::types::PeerAffinity::High,
         address: vec![network_2.local_addr().into()],
+        pq_public_key: None,
     });
 
     // Expect both to have new peer events.
@@ -971,6 +979,149 @@ async fn network_ref_via_extension() -> Result<()> {
         .into_inner();
 
     assert_eq!(1, response.get_u8());
+
+    Ok(())
+}
+
+/// A network with a post-quantum key, and that key the way a peer would record it.
+fn build_network_with_pq_key(config: Config) -> Result<(Network, PqPublicKey)> {
+    let mut seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut seed);
+    let pq_private_key = PqPrivateKey::MlDsa44(seed);
+
+    let network = Network::bind("localhost:0")
+        .random_private_key()
+        .pq_private_key(pq_private_key.clone())
+        .server_name("test")
+        .config(config)
+        .start(echo_service())?;
+
+    Ok((network, pq_private_key.public_key()))
+}
+
+fn record_pq_key(network: &Network, peer: &Network, pq_public_key: &PqPublicKey) {
+    network.known_peers().insert(crate::types::PeerInfo {
+        peer_id: peer.peer_id(),
+        affinity: crate::types::PeerAffinity::Allowed,
+        address: vec![],
+        pq_public_key: Some(pq_public_key.clone()),
+    });
+}
+
+#[tokio::test]
+async fn recorded_pq_key_is_enforced() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let network_1 = build_network()?;
+    let (network_2, pq_key_2) = build_network_with_pq_key(Config::default())?;
+    let (network_3, _) = build_network_with_pq_key(Config::default())?;
+    let network_4 = build_network()?;
+
+    // Peer 2 is recorded with its own key. Peer 3 has another key, and peer 4 has none.
+    for peer in [&network_2, &network_3, &network_4] {
+        record_pq_key(&network_1, peer, &pq_key_2);
+    }
+
+    network_1
+        .connect_with_peer_id(network_2.local_addr(), network_2.peer_id())
+        .await?;
+    assert_eq!(
+        network_1
+            .probe_address(network_2.local_addr(), network_2.peer_id())
+            .await,
+        ProbeOutcome::Reachable
+    );
+
+    // Peers 3 and 4 hold the right Ed25519 key, and that is no longer enough in either direction.
+    for peer in [&network_3, &network_4] {
+        network_1
+            .connect_with_peer_id(peer.local_addr(), peer.peer_id())
+            .await
+            .unwrap_err();
+        network_1.connect(peer.local_addr()).await.unwrap_err();
+        peer.connect_with_peer_id(network_1.local_addr(), network_1.peer_id())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            network_1
+                .probe_address(peer.local_addr(), peer.peer_id())
+                .await,
+            ProbeOutcome::WrongIdentity
+        );
+    }
+    assert_eq!(network_1.peers(), vec![network_2.peer_id()]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_recorded_later_applies_to_an_open_connection() -> Result<()> {
+    use crate::types::{DisconnectReason, PeerEvent::*};
+
+    let _guard = crate::init_tracing_for_testing();
+
+    let network_1 = build_network_with_config(Config {
+        connectivity_check_interval_ms: Some(50),
+        ..Default::default()
+    })?;
+    let network_2 = build_network()?;
+    let (network_3, pq_key_3) = build_network_with_pq_key(Config::default())?;
+    let mut subscriber_1 = network_1.subscribe()?.0;
+
+    for peer in [&network_2, &network_3] {
+        network_1
+            .connect_with_peer_id(peer.local_addr(), peer.peer_id())
+            .await?;
+        assert_eq!(NewPeer(peer.peer_id()), subscriber_1.recv().await?);
+    }
+
+    // Peer 3 showed the key that now goes on record. Peer 2 has none and showed its Ed25519 cert.
+    record_pq_key(&network_1, &network_3, &pq_key_3);
+    record_pq_key(&network_1, &network_2, &pq_key_3);
+
+    let lost = tokio::time::timeout(Duration::from_secs(5), subscriber_1.recv()).await;
+    assert_eq!(
+        lost.unwrap()?,
+        LostPeer(network_2.peer_id(), DisconnectReason::Requested)
+    );
+    assert_eq!(network_1.peers(), vec![network_3.peer_id()]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn classical_authentication_connects_unless_a_key_is_recorded() -> Result<()> {
+    let _guard = crate::init_tracing_for_testing();
+
+    let (classical, classical_pq_key) = build_network_with_pq_key(Config {
+        authentication: Some(crate::Authentication::Classical),
+        ..Default::default()
+    })?;
+    let (network, pq_key) = build_network_with_pq_key(Config::default())?;
+
+    classical
+        .connect_with_peer_id(network.local_addr(), network.peer_id())
+        .await?;
+    classical.disconnect(network.peer_id())?;
+    network
+        .connect_with_peer_id(classical.local_addr(), classical.peer_id())
+        .await?;
+    classical.disconnect(network.peer_id())?;
+
+    // The classical node asks for Ed25519 certs, so it never sees the key it has on record.
+    record_pq_key(&classical, &network, &pq_key);
+    classical
+        .connect_with_peer_id(network.local_addr(), network.peer_id())
+        .await
+        .unwrap_err();
+    classical.known_peers().remove(&network.peer_id());
+
+    // And it does not show its own post-quantum key, so a peer that recorded it turns it away.
+    record_pq_key(&network, &classical, &classical_pq_key);
+    network
+        .connect_with_peer_id(classical.local_addr(), classical.peer_id())
+        .await
+        .unwrap_err();
 
     Ok(())
 }

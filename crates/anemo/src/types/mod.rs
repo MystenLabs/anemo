@@ -1,10 +1,12 @@
 mod address;
 mod peer_id;
+mod pq_key;
 pub mod request;
 pub mod response;
 
 pub use address::Address;
 pub use peer_id::{ConnectionOrigin, Direction, PeerId};
+pub use pq_key::{PqPrivateKey, PqPublicKey};
 
 pub use http::Extensions;
 use quinn::ConnectionError;
@@ -54,6 +56,11 @@ pub struct PeerInfo {
     pub peer_id: PeerId,
     pub affinity: PeerAffinity,
     pub address: Vec<Address>,
+    /// The peer's post-quantum public key (see [`PqPrivateKey::public_key`]), if we know it.
+    /// When set, the peer has to authenticate with this key and its Ed25519 certificate alone is
+    /// rejected. A connection that is already open is dropped at the next connectivity check if
+    /// the peer did not show this key on it.
+    pub pq_public_key: Option<PqPublicKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,13 +1,18 @@
 use crate::{
     crypto::{CertVerifier, ExpectedCertVerifier, PROBE_SERVER_NAME},
-    PeerId, Result,
+    PeerId, PqPrivateKey, Result,
 };
+use aws_lc_rs::signature::{KeyPair as _, PqdsaKeyPair};
 use pkcs8::EncodePrivateKey;
 use quinn::VarInt;
 use rcgen::{CertificateParams, KeyPair};
 use rustls::client::danger::ServerCertVerifier;
+use rustls::client::ResolvesClientCert;
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::PrivateKeyDer;
+use rustls::server::{ClientHello, ResolvesServerCert, ResolvesServerCertUsingSni};
+use rustls::sign::CertifiedKey;
+use rustls::SignatureScheme;
 use serde::{Deserialize, Serialize};
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
@@ -25,6 +30,12 @@ pub struct Config {
     /// If unspecified, this will default to [`KeyExchange::Hybrid`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_exchange: Option<KeyExchange>,
+
+    /// Certificates to authenticate with, see [`Authentication`].
+    ///
+    /// If unspecified, this will default to [`Authentication::PostQuantum`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentication: Option<Authentication>,
 
     /// Size of the internal `ConnectionManager`s mailbox.
     ///
@@ -443,6 +454,21 @@ pub enum KeyExchange {
     Classical,
 }
 
+/// Certificates a node authenticates with in the TLS handshake.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Authentication {
+    /// Take post-quantum certificates from peers, and show ours to peers that take it if this
+    /// node has a `pq_private_key`. Ed25519 with the rest.
+    #[default]
+    PostQuantum,
+    /// What anemo did before: Ed25519 only, even with a `pq_private_key`. It asks peers for the
+    /// same and takes nothing else from them. This is to roll back. A recorded post-quantum key
+    /// still has to be shown, so those peers can't connect in this mode.
+    Classical,
+}
+
 /// The aws-lc-rs default groups change with rustls' `prefer-post-quantum` feature, so set ours.
 fn crypto_provider(key_exchange: KeyExchange) -> Arc<rustls::crypto::CryptoProvider> {
     use rustls::crypto::aws_lc_rs::{default_provider, kx_group};
@@ -456,6 +482,76 @@ fn crypto_provider(key_exchange: KeyExchange) -> Arc<rustls::crypto::CryptoProvi
     let mut provider = default_provider();
     provider.kx_groups = groups;
     Arc::new(provider)
+}
+
+/// Our certs for one server name. Both stand for the same PeerId. The post-quantum one needs a
+/// `pq_private_key` and is left out with [`Authentication::Classical`].
+#[derive(Clone, Debug)]
+pub(crate) struct CertifiedKeys {
+    ed25519: Arc<CertifiedKey>,
+    /// With the scheme a peer has to list to be shown this cert. Peers from before it don't,
+    /// and would fail on it, so they keep getting the Ed25519 one.
+    pq: Option<(SignatureScheme, Arc<CertifiedKey>)>,
+}
+
+impl ResolvesClientCert for CertifiedKeys {
+    fn resolve(
+        &self,
+        _root_hint_subjects: &[&[u8]],
+        sigschemes: &[SignatureScheme],
+    ) -> Option<Arc<CertifiedKey>> {
+        Some(match &self.pq {
+            Some((scheme, pq)) if sigschemes.contains(scheme) => pq.clone(),
+            _ => self.ed25519.clone(),
+        })
+    }
+
+    fn has_certs(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+struct ServerCertResolver {
+    ed25519: ResolvesServerCertUsingSni,
+    pq: Option<(SignatureScheme, ResolvesServerCertUsingSni)>,
+}
+
+impl ResolvesServerCert for ServerCertResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        match &self.pq {
+            Some((scheme, pq)) if client_hello.signature_schemes().contains(scheme) => {
+                pq.resolve(client_hello)
+            }
+            _ => self.ed25519.resolve(client_hello),
+        }
+    }
+}
+
+/// rcgen 0.14 can't load an ML-DSA key (`from_der_and_sign_algo` panics on it), so it signs the
+/// cert through ours.
+struct PqKeyPair(PqdsaKeyPair, &'static rcgen::SignatureAlgorithm);
+
+impl rcgen::PublicKeyData for PqKeyPair {
+    fn der_bytes(&self) -> &[u8] {
+        self.0.public_key().as_ref()
+    }
+
+    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+        self.1
+    }
+}
+
+impl rcgen::SigningKey for PqKeyPair {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        let mut signature = vec![0; self.0.algorithm().signature_len()];
+        let len = self
+            .0
+            .sign(message, &mut signature)
+            .map_err(|_| rcgen::Error::RingUnspecified)?;
+        signature.truncate(len);
+        Ok(signature)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -476,6 +572,11 @@ pub(crate) struct EndpointConfigBuilder {
     pub transport_config: Option<quinn::TransportConfig>,
 
     pub key_exchange: Option<KeyExchange>,
+
+    pub authentication: Option<Authentication>,
+
+    /// Post-quantum Private Key
+    pub pq_private_key: Option<PqPrivateKey>,
 }
 
 impl EndpointConfigBuilder {
@@ -485,6 +586,11 @@ impl EndpointConfigBuilder {
 
     pub fn key_exchange(mut self, key_exchange: KeyExchange) -> Self {
         self.key_exchange = Some(key_exchange);
+        self
+    }
+
+    pub fn authentication(mut self, authentication: Authentication) -> Self {
+        self.authentication = Some(authentication);
         self
     }
 
@@ -505,6 +611,11 @@ impl EndpointConfigBuilder {
 
     pub fn private_key(mut self, private_key: [u8; 32]) -> Self {
         self.private_key = Some(private_key);
+        self
+    }
+
+    pub fn pq_private_key(mut self, pq_private_key: Option<PqPrivateKey>) -> Self {
+        self.pq_private_key = pq_private_key;
         self
     }
 
@@ -530,17 +641,25 @@ impl EndpointConfigBuilder {
         let primary_server_name = self.server_name.unwrap();
         let transport_config = Arc::new(self.transport_config.unwrap_or_default());
         let crypto_provider = crypto_provider(self.key_exchange.unwrap_or_default());
+        let authentication = self.authentication.unwrap_or_default();
+        let pq_private_key = self
+            .pq_private_key
+            .filter(|_| authentication == Authentication::PostQuantum);
 
         let cert_verifier = Arc::new(CertVerifier {
             server_names: vec![primary_server_name.clone()],
+            authentication,
         });
-        let (primary_certificate, pkcs8_der) = Self::generate_cert(&keypair, &primary_server_name);
+        let certified_keys = |server_name: &str| {
+            let pq_private_key = pq_private_key.as_ref();
+            Self::certified_keys(&keypair, pq_private_key, server_name, &crypto_provider)
+        };
+        let primary_certs = Arc::new(certified_keys(&primary_server_name)?);
 
         // Client only uses the primary `server_name` when initiating outbound connections
-        // so only needs the primary certificate.
+        // so only needs the primary certificates.
         let client_config = Self::client_config(
-            primary_certificate.clone(),
-            pkcs8_der.clone_key(),
+            primary_certs.clone(),
             cert_verifier.clone(),
             transport_config.clone(),
             crypto_provider.clone(),
@@ -549,47 +668,49 @@ impl EndpointConfigBuilder {
         // Always register a dedicated probe certificate/server-name in the cert resolver so any node
         // can be probed (the client selects it via SNI). It is intentionally not added to the
         // client-cert verifier: probing clients still authenticate with their primary certificate.
-        let (probe_certificate, _) = Self::generate_cert(&keypair, PROBE_SERVER_NAME);
-        let probe_cert_entry = (PROBE_SERVER_NAME.to_owned(), probe_certificate);
+        let probe_cert_entry = (
+            PROBE_SERVER_NAME.to_owned(),
+            certified_keys(PROBE_SERVER_NAME)?,
+        );
+        let primary_cert_entry = (
+            primary_server_name.clone(),
+            CertifiedKeys::clone(&primary_certs),
+        );
 
         let alternate_server_name = self.alternate_server_name;
         let server_config = match alternate_server_name {
             Some(alternate_server_name) => {
-                let (alternate_certificate, _) =
-                    Self::generate_cert(&keypair, &alternate_server_name);
+                let alternate_certs = certified_keys(&alternate_server_name)?;
                 let cert_verifier = Arc::new(CertVerifier {
                     server_names: vec![primary_server_name.clone(), alternate_server_name.clone()],
+                    authentication,
                 });
                 Self::server_config(
                     vec![
-                        (primary_server_name.clone(), primary_certificate.clone()),
-                        (alternate_server_name, alternate_certificate),
+                        primary_cert_entry,
+                        (alternate_server_name, alternate_certs),
                         probe_cert_entry,
                     ],
-                    pkcs8_der.clone_key(),
                     cert_verifier,
                     transport_config.clone(),
                     crypto_provider.clone(),
                 )
             }
             _ => Self::server_config(
-                vec![
-                    (primary_server_name.clone(), primary_certificate.clone()),
-                    probe_cert_entry,
-                ],
-                pkcs8_der.clone_key(),
+                vec![primary_cert_entry, probe_cert_entry],
                 cert_verifier,
                 transport_config.clone(),
                 crypto_provider.clone(),
             ),
         }?;
 
-        let peer_id = crate::crypto::peer_id_from_certificate(&primary_certificate).unwrap();
+        let peer_id =
+            crate::crypto::peer_id_from_certificate(&primary_certs.ed25519.cert[0]).unwrap();
 
         Ok(EndpointConfig {
             peer_id,
-            client_certificate: primary_certificate,
-            pkcs8_der,
+            client_certs: primary_certs,
+            authentication,
             crypto_provider,
             quinn_server_config: server_config,
             quinn_client_config: client_config,
@@ -616,20 +737,82 @@ impl EndpointConfigBuilder {
         (certificate_der, key_der)
     }
 
+    /// Cert for our post-quantum key. The extension ties that key to the Ed25519 one, so a peer
+    /// reads the same PeerId from either cert.
+    fn generate_pq_cert(
+        private_key: &[u8; 32],
+        pq_private_key: &PqPrivateKey,
+        server_name: &str,
+    ) -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
+        use rcgen::PublicKeyData;
+
+        let keypair = PqKeyPair(pq_private_key.keypair(), pq_private_key.rcgen_algorithm());
+        let pkcs8 = keypair.0.to_pkcs8v1().unwrap();
+        let key_der = PrivateKeyDer::Pkcs8(pkcs8.as_ref().to_vec().into());
+
+        let mut params = CertificateParams::new(vec![server_name.to_owned()]).unwrap();
+        params
+            .custom_extensions
+            .push(rcgen::CustomExtension::from_oid_content(
+                crate::crypto::PQ_IDENTITY_OID,
+                crate::crypto::pq_identity_extension(
+                    private_key,
+                    &keypair.subject_public_key_info(),
+                ),
+            ));
+        let certificate = params.self_signed(&keypair).unwrap();
+
+        (certificate.der().to_owned(), key_der)
+    }
+
+    fn certified_keys(
+        keypair: &ed25519::KeypairBytes,
+        pq_private_key: Option<&PqPrivateKey>,
+        server_name: &str,
+        crypto_provider: &rustls::crypto::CryptoProvider,
+    ) -> Result<CertifiedKeys> {
+        let certified_key = |(cert, key_der)| -> Result<Arc<CertifiedKey>> {
+            let key = crypto_provider
+                .key_provider
+                .load_private_key(key_der)
+                .map_err(|_| anyhow::anyhow!("invalid private key"))?;
+            Ok(Arc::new(CertifiedKey::new(vec![cert], key)))
+        };
+
+        let pq = pq_private_key
+            .map(|pq_private_key| {
+                let private_key = &keypair.secret_key;
+                let pq_cert = Self::generate_pq_cert(private_key, pq_private_key, server_name);
+                Ok::<_, crate::Error>((pq_private_key.scheme(), certified_key(pq_cert)?))
+            })
+            .transpose()?;
+
+        Ok(CertifiedKeys {
+            ed25519: certified_key(Self::generate_cert(keypair, server_name))?,
+            pq,
+        })
+    }
+
     fn server_crypto(
-        certs: Vec<(String, CertificateDer<'static>)>,
-        pkcs8_der: PrivateKeyDer<'static>,
+        certs: Vec<(String, CertifiedKeys)>,
         cert_verifier: Arc<CertVerifier>,
         crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     ) -> Result<rustls::ServerConfig> {
-        let mut server_cert_resolver = rustls::server::ResolvesServerCertUsingSni::new();
-        let key = crypto_provider
-            .key_provider
-            .load_private_key(pkcs8_der)
-            .map_err(|_| anyhow::anyhow!("invalid private key"))?;
-        for (server_name, cert) in certs {
-            let certified_key = rustls::sign::CertifiedKey::new(vec![cert], key.clone());
-            server_cert_resolver.add(&server_name, certified_key)?;
+        let mut server_cert_resolver = ServerCertResolver {
+            ed25519: ResolvesServerCertUsingSni::new(),
+            pq: None,
+        };
+        for (server_name, certs) in certs {
+            server_cert_resolver
+                .ed25519
+                .add(&server_name, CertifiedKey::clone(&certs.ed25519))?;
+            if let Some((scheme, pq)) = &certs.pq {
+                server_cert_resolver
+                    .pq
+                    .get_or_insert_with(|| (*scheme, ResolvesServerCertUsingSni::new()))
+                    .1
+                    .add(&server_name, CertifiedKey::clone(pq))?;
+            }
         }
 
         Ok(rustls::ServerConfig::builder_with_provider(crypto_provider)
@@ -639,13 +822,12 @@ impl EndpointConfigBuilder {
     }
 
     fn server_config(
-        certs: Vec<(String, CertificateDer<'static>)>,
-        pkcs8_der: PrivateKeyDer<'static>,
+        certs: Vec<(String, CertifiedKeys)>,
         cert_verifier: Arc<CertVerifier>,
         transport_config: Arc<quinn::TransportConfig>,
         crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     ) -> Result<quinn::ServerConfig> {
-        let server_crypto = Self::server_crypto(certs, pkcs8_der, cert_verifier, crypto_provider)?;
+        let server_crypto = Self::server_crypto(certs, cert_verifier, crypto_provider)?;
 
         let mut server = quinn::ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto).unwrap(),
@@ -655,8 +837,7 @@ impl EndpointConfigBuilder {
     }
 
     fn client_crypto(
-        cert: CertificateDer<'static>,
-        pkcs8_der: PrivateKeyDer<'static>,
+        certs: Arc<CertifiedKeys>,
         cert_verifier: Arc<dyn ServerCertVerifier>,
         crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     ) -> Result<rustls::ClientConfig> {
@@ -664,17 +845,16 @@ impl EndpointConfigBuilder {
             .with_protocol_versions(&[&rustls::version::TLS13])?
             .dangerous()
             .with_custom_certificate_verifier(cert_verifier)
-            .with_client_auth_cert(vec![cert], pkcs8_der)?)
+            .with_client_cert_resolver(certs))
     }
 
     fn client_config(
-        cert: CertificateDer<'static>,
-        pkcs8_der: PrivateKeyDer<'static>,
+        certs: Arc<CertifiedKeys>,
         cert_verifier: Arc<CertVerifier>,
         transport_config: Arc<quinn::TransportConfig>,
         crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     ) -> Result<quinn::ClientConfig> {
-        let client_crypto = Self::client_crypto(cert, pkcs8_der, cert_verifier, crypto_provider)?;
+        let client_crypto = Self::client_crypto(certs, cert_verifier, crypto_provider)?;
 
         let mut client = quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto).unwrap(),
@@ -687,9 +867,9 @@ impl EndpointConfigBuilder {
 #[derive(Debug)]
 pub(crate) struct EndpointConfig {
     peer_id: PeerId,
-    // Store client certificate for outbound connections initiation
-    client_certificate: CertificateDer<'static>,
-    pkcs8_der: PrivateKeyDer<'static>,
+    // Store client certificates for outbound connections initiation
+    client_certs: Arc<CertifiedKeys>,
+    authentication: Authentication,
     crypto_provider: Arc<rustls::crypto::CryptoProvider>,
     quinn_server_config: quinn::ServerConfig,
     quinn_client_config: quinn::ClientConfig,
@@ -730,8 +910,7 @@ impl EndpointConfig {
 
     fn client_config_with_verifier(&self, verifier: ExpectedCertVerifier) -> quinn::ClientConfig {
         let client_crypto = EndpointConfigBuilder::client_crypto(
-            self.client_certificate.clone(),
-            self.pkcs8_der.clone_key(),
+            self.client_certs.clone(),
             Arc::new(verifier),
             self.crypto_provider.clone(),
         )
@@ -751,6 +930,7 @@ impl EndpointConfig {
         self.client_config_with_verifier(ExpectedCertVerifier(
             CertVerifier {
                 server_names: vec![self.server_name().into()],
+                authentication: self.authentication,
             },
             peer_id,
         ))
@@ -763,6 +943,7 @@ impl EndpointConfig {
         self.client_config_with_verifier(ExpectedCertVerifier(
             CertVerifier {
                 server_names: vec![PROBE_SERVER_NAME.into()],
+                authentication: self.authentication,
             },
             peer_id,
         ))
@@ -797,21 +978,74 @@ mod tests {
         }
     }
 
-    fn verifier() -> Arc<CertVerifier> {
+    fn verifier(authentication: Authentication) -> Arc<CertVerifier> {
         Arc::new(CertVerifier {
             server_names: vec![SERVER_NAME.to_owned()],
+            authentication,
         })
     }
 
+    /// One side of a handshake: its keys and what it lists.
+    struct Node {
+        keypair: ed25519::KeypairBytes,
+        pq_private_key: Option<PqPrivateKey>,
+        authentication: Authentication,
+    }
+
+    impl Node {
+        fn new() -> Self {
+            Self {
+                keypair: random_keypair(),
+                pq_private_key: Some(PqPrivateKey::MlDsa44(random_keypair().secret_key)),
+                authentication: Authentication::PostQuantum,
+            }
+        }
+
+        fn certified_keys(&self, provider: &CryptoProvider) -> CertifiedKeys {
+            let pq_private_key = self.pq_private_key.as_ref();
+            EndpointConfigBuilder::certified_keys(
+                &self.keypair,
+                pq_private_key,
+                SERVER_NAME,
+                provider,
+            )
+            .unwrap()
+        }
+
+        fn client(&self, provider: Arc<CryptoProvider>) -> Arc<rustls::ClientConfig> {
+            let certs = Arc::new(self.certified_keys(&provider));
+            let verifier = verifier(self.authentication);
+            Arc::new(EndpointConfigBuilder::client_crypto(certs, verifier, provider).unwrap())
+        }
+
+        fn server(&self, provider: Arc<CryptoProvider>) -> Arc<rustls::ServerConfig> {
+            let certs = vec![(SERVER_NAME.to_owned(), self.certified_keys(&provider))];
+            let verifier = verifier(self.authentication);
+            Arc::new(EndpointConfigBuilder::server_crypto(certs, verifier, provider).unwrap())
+        }
+
+        /// What a peer reads from our Ed25519 cert.
+        fn ed25519_identity(&self) -> (PeerId, Option<crate::PqPublicKey>) {
+            let (cert, _) = EndpointConfigBuilder::generate_cert(&self.keypair, SERVER_NAME);
+            (
+                crate::crypto::peer_id_from_certificate(&cert).unwrap(),
+                None,
+            )
+        }
+
+        /// What a peer reads from our post-quantum cert.
+        fn pq_identity(&self) -> (PeerId, Option<crate::PqPublicKey>) {
+            let pq_public_key = self.pq_private_key.as_ref().unwrap().public_key();
+            (self.ed25519_identity().0, Some(pq_public_key))
+        }
+    }
+
     fn client_tls(provider: Arc<CryptoProvider>) -> Arc<rustls::ClientConfig> {
-        let (cert, key) = EndpointConfigBuilder::generate_cert(&random_keypair(), SERVER_NAME);
-        Arc::new(EndpointConfigBuilder::client_crypto(cert, key, verifier(), provider).unwrap())
+        Node::new().client(provider)
     }
 
     fn server_tls(provider: Arc<CryptoProvider>) -> Arc<rustls::ServerConfig> {
-        let (cert, key) = EndpointConfigBuilder::generate_cert(&random_keypair(), SERVER_NAME);
-        let certs = vec![(SERVER_NAME.to_owned(), cert)];
-        Arc::new(EndpointConfigBuilder::server_crypto(certs, key, verifier(), provider).unwrap())
+        Node::new().server(provider)
     }
 
     /// quinn has no public API for the negotiated group, so drive rustls directly.
@@ -819,6 +1053,20 @@ mod tests {
         client: &Arc<rustls::ClientConfig>,
         server: &Arc<rustls::ServerConfig>,
     ) -> (NamedGroup, HandshakeKind) {
+        let (client, server) = connect(client, server);
+
+        let group = client.negotiated_key_exchange_group().unwrap().name();
+        assert_eq!(
+            group,
+            server.negotiated_key_exchange_group().unwrap().name()
+        );
+        (group, client.handshake_kind().unwrap())
+    }
+
+    fn connect(
+        client: &Arc<rustls::ClientConfig>,
+        server: &Arc<rustls::ServerConfig>,
+    ) -> (rustls::ClientConnection, rustls::ServerConnection) {
         let name = ServerName::try_from(SERVER_NAME).unwrap();
         let mut client = rustls::ClientConnection::new(client.clone(), name).unwrap();
         let mut server = rustls::ServerConnection::new(server.clone()).unwrap();
@@ -844,12 +1092,7 @@ mod tests {
         }
         assert!(!client.is_handshaking() && !server.is_handshaking());
 
-        let group = client.negotiated_key_exchange_group().unwrap().name();
-        assert_eq!(
-            group,
-            server.negotiated_key_exchange_group().unwrap().name()
-        );
-        (group, client.handshake_kind().unwrap())
+        (client, server)
     }
 
     fn negotiated_group(client: KeyExchange, server: KeyExchange) -> NamedGroup {
@@ -954,5 +1197,181 @@ mod tests {
                 "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
             );
         }
+    }
+
+    /// PeerId and post-quantum key (if it showed that cert) of the server and of the client, each as
+    /// the other side saw it.
+    fn identities(
+        client: &Arc<rustls::ClientConfig>,
+        server: &Arc<rustls::ServerConfig>,
+    ) -> [(PeerId, Option<crate::PqPublicKey>); 2] {
+        let (client, server) = connect(client, server);
+        let identity = |certs: Option<&[CertificateDer<'static>]>| {
+            crate::crypto::peer_identity_from_certificate(&certs.unwrap()[0]).unwrap()
+        };
+        [
+            identity(client.peer_certificates()),
+            identity(server.peer_certificates()),
+        ]
+    }
+
+    #[test]
+    fn peers_show_pq_certs_under_the_same_peer_id() {
+        let (client, server) = (Node::new(), Node::new());
+        let provider = crypto_provider(Hybrid);
+
+        let [server_seen, client_seen] =
+            identities(&client.client(provider.clone()), &server.server(provider));
+
+        assert_eq!(server_seen, server.pq_identity());
+        assert_eq!(client_seen, client.pq_identity());
+    }
+
+    /// The post-quantum key is optional. A node without one still takes the cert of a peer
+    /// that has one.
+    #[test]
+    fn node_without_a_pq_key_shows_its_ed25519_cert() {
+        let with_key = Node::new();
+        let without_key = Node {
+            pq_private_key: None,
+            ..Node::new()
+        };
+        let provider = crypto_provider(Hybrid);
+
+        let [server_seen, client_seen] = identities(
+            &without_key.client(provider.clone()),
+            &with_key.server(provider.clone()),
+        );
+        assert_eq!(server_seen, with_key.pq_identity());
+        assert_eq!(client_seen, without_key.ed25519_identity());
+
+        let [server_seen, client_seen] = identities(
+            &with_key.client(provider.clone()),
+            &without_key.server(provider),
+        );
+        assert_eq!(server_seen, without_key.ed25519_identity());
+        assert_eq!(client_seen, with_key.pq_identity());
+    }
+
+    #[test]
+    fn authentication_defaults_to_post_quantum() {
+        let parse = |json| serde_json::from_str::<Config>(json).unwrap().authentication;
+
+        assert_eq!(parse("{}").unwrap_or_default(), Authentication::PostQuantum);
+        assert_eq!(
+            parse(r#"{"authentication":"post-quantum"}"#),
+            Some(Authentication::PostQuantum)
+        );
+        assert_eq!(
+            parse(r#"{"authentication":"classical"}"#),
+            Some(Authentication::Classical)
+        );
+    }
+
+    /// A classical peer lists Ed25519 only, like a peer from before this change, so both sides end up
+    /// on Ed25519 certs whoever dials.
+    #[test]
+    fn classical_peer_gets_the_ed25519_cert() {
+        let node = Node::new();
+        let classical = Node {
+            pq_private_key: None,
+            authentication: Authentication::Classical,
+            ..Node::new()
+        };
+        assert_eq!(
+            ServerCertVerifier::supported_verify_schemes(&*verifier(classical.authentication)),
+            [SignatureScheme::ED25519]
+        );
+        let provider = crypto_provider(Hybrid);
+
+        let [server_seen, client_seen] = identities(
+            &classical.client(provider.clone()),
+            &node.server(provider.clone()),
+        );
+        assert_eq!(server_seen, node.ed25519_identity());
+        assert_eq!(client_seen, classical.ed25519_identity());
+
+        let [server_seen, client_seen] =
+            identities(&node.client(provider.clone()), &classical.server(provider));
+        assert_eq!(server_seen, classical.ed25519_identity());
+        assert_eq!(client_seen, node.ed25519_identity());
+    }
+
+    /// A post-quantum cert only gets a PeerId through that PeerId's signature over its key.
+    #[test]
+    fn pq_cert_cannot_claim_another_peer_id() {
+        use rcgen::PublicKeyData;
+
+        let (victim, attacker) = ([1; 32], [2; 32]);
+        let keypair = |seed| {
+            let pq_private_key = PqPrivateKey::MlDsa44(seed);
+            PqKeyPair(pq_private_key.keypair(), pq_private_key.rcgen_algorithm())
+        };
+        let (victim_pq, attacker_pq) = (keypair([3; 32]), keypair([4; 32]));
+        let identity = |extension: Option<Vec<u8>>| {
+            let mut params = CertificateParams::new(vec![SERVER_NAME.to_owned()]).unwrap();
+            params.custom_extensions.extend(extension.map(|content| {
+                rcgen::CustomExtension::from_oid_content(crate::crypto::PQ_IDENTITY_OID, content)
+            }));
+            let cert = params.self_signed(&attacker_pq).unwrap();
+            crate::crypto::peer_identity_from_certificate(cert.der())
+        };
+        let extension = crate::crypto::pq_identity_extension;
+
+        let honest = extension(&attacker, &attacker_pq.subject_public_key_info());
+        // The victim's own extension, which signs for the victim's key, not this one.
+        let replayed = extension(&victim, &victim_pq.subject_public_key_info());
+        // The attacker's signature with the victim's Ed25519 key swapped in.
+        let mut forged = honest.clone();
+        forged[2..34].copy_from_slice(&replayed[2..34]);
+        // A signature over the bare key, which would not say what scheme the key is for.
+        let schemeless = extension(&attacker, attacker_pq.der_bytes());
+
+        assert!(identity(Some(honest)).is_ok());
+        for extension in [None, Some(replayed), Some(forged), Some(schemeless)] {
+            assert!(identity(extension).is_err());
+        }
+    }
+
+    fn pq_cert(node: &Node) -> CertificateDer<'static> {
+        let pq_private_key = node.pq_private_key.as_ref().unwrap();
+        let private_key = &node.keypair.secret_key;
+        EndpointConfigBuilder::generate_pq_cert(private_key, pq_private_key, SERVER_NAME).0
+    }
+
+    fn accepts(authentication: Authentication, cert: &CertificateDer<'_>) -> [bool; 2] {
+        use rustls::server::danger::ClientCertVerifier;
+
+        let verifier = verifier(authentication);
+        let name = ServerName::try_from(SERVER_NAME).unwrap();
+        let now = rustls::pki_types::UnixTime::now();
+        [
+            verifier
+                .verify_server_cert(cert, &[], &name, &[], now)
+                .is_ok(),
+            verifier.verify_client_cert(cert, &[], now).is_ok(),
+        ]
+    }
+
+    /// Classical is the rollback, so a post-quantum cert must not get through even from a peer
+    /// that sends one without being asked.
+    #[test]
+    fn classical_node_refuses_a_pq_cert() {
+        let pq_cert = pq_cert(&Node::new());
+
+        assert_eq!(accepts(Authentication::PostQuantum, &pq_cert), [true; 2]);
+        assert_eq!(accepts(Authentication::Classical, &pq_cert), [false; 2]);
+    }
+
+    /// The cert is its own trust anchor, and its own signature is still checked.
+    #[test]
+    fn pq_cert_with_a_broken_self_signature_is_refused() {
+        let mut pq_cert = pq_cert(&Node::new()).to_vec();
+        *pq_cert.last_mut().unwrap() ^= 1;
+
+        assert_eq!(
+            accepts(Authentication::PostQuantum, &pq_cert.into()),
+            [false; 2]
+        );
     }
 }
